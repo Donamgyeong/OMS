@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+.env
+.env.verify
+*.sqlite3
+staticfiles/
+media/
+backups/
+.coverage

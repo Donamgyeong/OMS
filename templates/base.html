@@ -1,0 +1,5 @@
+{% load static %}<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}OMS 근무 관리{% endblock %}</title><link rel="stylesheet" href="{% static 'vendor/bootstrap/bootstrap.min.css' %}"><link rel="stylesheet" href="{% static 'css/app.css' %}"><script defer src="{% static 'vendor/htmx/htmx.min.js' %}"></script></head>
+<body><header><a href="{% url 'dashboard' %}">OMS · 근무 관리</a>{% if user.is_authenticated %}<nav>{{ user.get_full_name|default:user.username }} · {{ user.get_role_display }} {% if user.is_superuser %}<a href="{% url 'admin:index' %}">관리자</a>{% endif %}<form method="post" action="{% url 'logout' %}">{% csrf_token %}<button>로그아웃</button></form></nav>{% endif %}</header>
+<main>{% block content %}{% endblock %}</main></body></html>

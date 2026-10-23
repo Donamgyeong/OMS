@@ -1,0 +1,6 @@
+# Local verification only. Keep production Compose unchanged.
+# docker compose -p oms-verify --env-file .env.verify -f compose.yaml -f compose.verify.yaml ...
+services:
+  app:
+    env_file: !override
+      - .env.verify

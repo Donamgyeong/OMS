@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<section class="login"><h1>로그인</h1><p>회사 계정으로 근무 내역을 확인하세요.</p><form method="post">{% csrf_token %}{{ form.as_p }}<input type="hidden" name="next" value="{{ next }}"><button type="submit">로그인</button></form></section>{% endblock %}
