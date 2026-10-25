@@ -17,7 +17,7 @@ Microsoft 365 Business Premium에는 Entra ID P1이 포함되므로, 해당 라�
 - 업무 데이터는 계속 OMS User의 PK를 참조한다. Entra는 외부 인증 식별자로 연결하며 업무 모델을 디렉터리 객체에 직접 종속시키지 않는다.
 - 기존 운영 계정 사전 연결·이메일 대조·과거 데이터 이전 작업은 필요하지 않다. 개발 데이터는 운영 데이터로 간주하지 않으며, 초기화는 별도 명시적 작업으로 다룬다.
 - 일반 관리자는 전체 조회와 기초정보 관리, Django Admin은 슈퍼유저 전용이라는 기존 경계를 유지한다.
-- Synology의 HTTPS 리버스 프록시와 사내망/VPN 접근 구성을 유지한다.
+- 외부 접속은 [Cloudflare Tunnel 전용 배포](deployment-cloudflare.md)를 사용한다. DSM 프록시를 거치지 않으며, 공개 HTTPS 주소를 Entra callback에 등록한다.
 
 ## 3. 로그인과 첫 사용자 생성 설계
 
@@ -82,7 +82,7 @@ Entra 사용자나 관리자가 OMS의 관리자·슈퍼유저로 자동 승격�
 
 - 사용자 브라우저가 Microsoft 로그인과 OMS HTTPS 도메인 양쪽에 접근할 수 있어야 한다. callback은 브라우저가 방문하므로 이 흐름만을 위해 NAS를 인터넷에 공개할 필요는 없다.
 - OMS 서버는 인증 메타데이터·서명 키·토큰 교환을 위해 Microsoft 관련 엔드포인트에 HTTPS로 접근할 수 있어야 한다. NAS의 DNS·시간 동기화·인증서 검증도 확인한다.
-- DSM 프록시의 Host 및 `X-Forwarded-Proto`, Secure 쿠키, callback URL을 실제 HTTPS 환경에서 검증한다.
+- Cloudflare가 전달하는 공개 Host 및 `X-Forwarded-Proto`, Secure 쿠키, callback URL을 실제 HTTPS 환경에서 검증한다. 앱·DB는 호스트 포트를 공개하지 않는다.
 - 개발・파일럿・운영 모두 일반 사용자는 SSO만 사용한다. UI·백엔드・Django Admin에서 일반 비밀번호 로그인을 허용하지 않고 Django Admin에도 SSO 인증을 연결한다.
 - 초기 비상 복구는 NAS SSH/컨테이너 관리 명령으로 설정·관리자 상태를 복구하는 방식으로 한다. 일반 웹 비밀번호 로그인과 별도 비상 로그인 화면은 만들지 않는다. NAS 운영 접근 권한과 복구 절차를 사전에 검증한다.
 

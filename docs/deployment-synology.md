@@ -1,5 +1,7 @@
 # Synology DS423 배포
 
+**외부 연결은 [Cloudflare Tunnel 배포 절차](deployment-cloudflare.md)를 우선 사용한다.** 이 경우 `compose.cloudflare.yaml`을 단독으로 사용하며 DSM HTTPS 리버스 프록시와 아래 3절은 필요 없다. 이미지 준비·업데이트·백업 원칙은 이 문서를 참고하되, 명령은 Cloudflare 문서처럼 같은 프로젝트 이름과 Compose 파일을 지정한다. 아래는 `compose.yaml`을 사용하는 DSM 프록시 대안이다.
+
 ## 전제
 
 - DS423은 ARM64 CPU와 RAM 2GB를 사용한다. 설치된 DSM의 패키지 센터에서 Container Manager 지원 여부를 확인한다.

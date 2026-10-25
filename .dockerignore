@@ -2,6 +2,8 @@
 .git
 .env
 .env.verify
+.env.cloudflare
+secrets
 __pycache__
 *.sqlite3
 staticfiles

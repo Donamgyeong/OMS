@@ -2,6 +2,8 @@
 
 OMS는 Microsoft 회사 계정으로만 로그인한다. Authlib 1.9.1의 OIDC Authorization Code Flow와 S256 PKCE를 사용한다. 로그인·계정 생성·권한 검증은 구현되어 있으며 실제 회사 테넌트의 앱 등록과 실계정 검증은 배포 담당자가 수행해야 한다.
 
+외부 접속은 [Cloudflare Tunnel 배포 문서](deployment-cloudflare.md)의 전용 Compose를 사용할 수 있다. 이 경우 공개 HTTPS 도메인을 아래 callback에 사용하고 origin은 Docker 내부 `http://app:8000`으로 연결한다. 이 문서의 `docker compose` 명령에도 배포 시 사용한 프로젝트 이름과 `-f compose.cloudflare.yaml`을 동일하게 지정한다.
+
 ## 1. 앱 등록
 
 개발용과 운영용 앱을 각각 등록한다.

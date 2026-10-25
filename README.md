@@ -7,6 +7,7 @@ Synology DS423에서 실행하기 위한 Django 기반 초과 근무 사전 승�
 - Python 3.12 / Django 5.2 LTS / PostgreSQL 17
 - Django Templates / HTMX 2.0.8 / Bootstrap 5.3.8 / 자체 CSS / Gunicorn / WhiteNoise
 - ARM64 앱 이미지 / Container Manager Compose / DSM HTTPS 리버스 프록시
+- 외부 연결용 Cloudflare Tunnel 전용 Compose (앱·DB 호스트 포트 미공개)
 - HTMX·Bootstrap은 라이선스와 함께 로컬 정적 자산으로 포함한다. 외부 CDN 없이 초기 화면을 제공하며 HTMX 상호작용은 업무 화면 구현 시 확장한다. 원본 재취득은 `python scripts/fetch_frontend.py`로 수행한다.
 
 ## 구현 범위
@@ -49,7 +50,9 @@ docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py makemigr
 docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py test
 ```
 
-NAS 설치·배포·백업 절차: [docs/deployment-synology.md](docs/deployment-synology.md)
+Cloudflare Tunnel 환경 구성·도메인·DNS·토큰·SSO 설정: [docs/deployment-cloudflare.md](docs/deployment-cloudflare.md). `compose.cloudflare.yaml`과 `.env.cloudflare.example`을 사용한다. 계정이나 도메인은 자동으로 생성하지 않는다.
+
+NAS 이미지 준비·백업·DSM 프록시 대안: [docs/deployment-synology.md](docs/deployment-synology.md)
 
 Docker ARM64·PostgreSQL 및 실제 HTTP 검증 결과와 재현 절차: [docs/verification.md](docs/verification.md)
 
@@ -66,7 +69,9 @@ scripts/            운영 서버 실행
 docs/               기획 및 NAS 배포 문서
 Dockerfile          비관리자 계정으로 실행하는 앱 이미지
 compose.yaml        DS423 ARM64 앱·DB 배포
+compose.cloudflare.yaml  포트 공개 없는 앱·DB·Cloudflare Tunnel 배포
 .env.example        운영 환경변수 예시
+.env.cloudflare.example  Cloudflare 배포 환경변수 예시
 ```
 
 의존성은 지원 버전 범위로 지정했다. 실제 배포 전 검증한 정확한 버전으로 잠금 파일을 만들고, 앱 이미지는 고유 릴리스 태그로 관리한다. ARM64 이미지·PostgreSQL은 Docker 에뮬레이션에서 검증했으며 NAS 실기기와 HTTPS 환경은 배포 시 확인한다.

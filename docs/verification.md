@@ -1,5 +1,24 @@
 # 템플릿 검증 기록
 
+## Cloudflare Tunnel 배포 환경 검증 (2026-10-25)
+
+계정·도메인·터널 연결 전 배포 파일을 준비했다. `compose.cloudflare.yaml`은 기존 DSM 배포 파일과 합치지 않는 독립 구성이다. 테스트용 자격 증명과 `oms-cloudflare-verify` 프로젝트에서 검사하고 실제 Cloudflare tunnel run은 시작하지 않았다.
+
+| 항목 | 결과 |
+| --- | --- |
+| Compose 구문 | `.env.cloudflare.example`으로 구문 검사 통과. 공개 ports 없음, 앱·DB·connector 네트워크와 HTTPS 프록시 설정 확인 |
+| cloudflared 이미지 | 공식 `2026.10.3` ARM64, UID/GID 65532, run/token-file/protocol/metrics 옵션 확인 |
+| 비밀 파일 권한 | 네트워크 차단·비루트·읽기 전용 컨테이너에서 테스트 파일 읽기 성공. 무효 토큰 오류를 예상대로 반환했고 실제 연결은 수행하지 않음 |
+| connector readiness | daemon 없는 네트워크 차단 컨테이너에서 /ready 접속 거부를 실패 코드로 반환하는 것 확인 |
+| 앱·DB 실행 | 별도 PostgreSQL DB에 마이그레이션 적용 후 앱과 DB healthy. 실제 PortBindings가 비어 있음을 확인 |
+| 네트워크 분리 | `tunnel` 네트워크에서 공개 Host와 X-Forwarded-Proto=https로 `app:8000` 로그인 화면 200, DB service 이름 해석 불가 확인 |
+| origin HTTP smoke | HTTPS 리다이렉트·정적 자산·DB health·로그인 화면·비밀번호 거부·관리자·CSRF·로그아웃 통과 |
+| 제외 규칙 | `secrets/`와 `.env.cloudflare` Git 제외 및 앱 빌드 context 제외 규칙 추가 |
+
+HTTP 검사는 이전에 검증한 SSO 앱 이미지를 사용했다. 앱 코드는 변경하지 않았으며, 이번 범위는 배포 구성과 문서다. 실제 connector 연결·DNS·Cloudflare edge TLS·브라우저 실계정 SSO는 검증하지 않았다. origin HTTP 검사의 인증 세션은 서버에서 생성한 테스트 fixture이며 실제 Entra 인증 성공을 의미하지 않는다. 검증용 컨테이너와 네트워크는 정리하고 DB/media 볼륨은 유지한다.
+
+실제 배포 단계와 외부 점검은 [Cloudflare 배포 문서](deployment-cloudflare.md)를 따른다.
+
 ## Entra SSO 구현 검증 (2026-10-25)
 
 `feat/entra-sso`에서 아직 배포하지 않은 신규 서비스 기준으로 구현했다. 기존 `oms-dev` 컨테이너·DB는 변경하지 않고 별도 `oms-sso-test` 프로젝트·DB·볼륨·포트 18001을 사용했다. 테스트 tenant/client/secret은 가짜 값이며 회사 계정이나 실제 테넌트 설정을 변경하지 않았다.
