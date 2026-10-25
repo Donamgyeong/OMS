@@ -206,6 +206,8 @@ def setup(request):
 @login_required
 def setup_edit(request, kind, pk=None):
     require_administrator(request.user)
+    if kind == "member" and pk is None:
+        raise Http404("사용자는 Microsoft 회사 계정으로 첫 로그인할 때 생성됩니다.")
     configs = {"member": (User, MemberForm, "사용자"), "department": (Department, DepartmentForm, "부서"),
         "policy": (OvertimePolicy, PolicyForm, "초과 근무 정책"), "holiday": (Holiday, HolidayForm, "휴일")}
     if kind not in configs:
@@ -220,9 +222,14 @@ def setup_edit(request, kind, pk=None):
         from django.db import transaction
         with transaction.atomic():
             obj = form.save(commit=False)
-            if kind == "member" and form.cleaned_data.get("password"):
-                obj.set_password(form.cleaned_data["password"])
-            obj.save()
+            if kind == "member":
+                # Do not overwrite a concurrently incremented session revocation version.
+                obj.save(update_fields=list(form._meta.fields))
+                if "is_active" in form.changed_data:
+                    from .authentication import revoke_sessions
+                    revoke_sessions(obj.pk)
+            else:
+                obj.save()
             LogEntry.objects.log_actions(user_id=request.user.pk, queryset=[obj],
                 action_flag=CHANGE if pk else ADDITION,
                 change_message=f"기초정보 화면: {', '.join(form.changed_data)}")

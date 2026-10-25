@@ -39,6 +39,8 @@ class User(AbstractUser):
     designated_approver = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="approval_members", verbose_name="지정 승인자")
     daily_work_minutes = models.PositiveIntegerField("일 소정근무(분)", default=480)
     working_weekdays = models.CharField("근무 요일(월=0, 일=6)", max_length=13, default="0,1,2,3,4")
+    onboarding_completed = models.BooleanField("업무 설정 완료", default=False)
+    auth_version = models.PositiveIntegerField(default=0, editable=False)
 
     def clean(self):
         super().clean()
@@ -46,6 +48,27 @@ class User(AbstractUser):
             raise ValidationError("본인을 지정 승인자로 설정할 수 없습니다.")
         if not self.working_weekdays or any(day not in "0123456" or len(day) != 1 for day in self.working_weekdays.split(",")):
             raise ValidationError("근무 요일은 0~6을 쉼표로 구분하세요.")
+        if self.onboarding_completed and not (self.is_superuser or self.role == self.Role.ADMIN):
+            if not self.employee_number or not self.department_id or not self.department.active:
+                raise ValidationError("업무 설정 완료 전 사번과 활성 부서를 지정하세요.")
+            from .services import resolve_approver
+            resolve_approver(self)
+
+
+class EntraIdentity(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="entra_identity")
+    tenant_id = models.UUIDField()
+    object_id = models.UUIDField()
+    linked_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["tenant_id", "object_id"], name="unique_entra_identity")]
+
+
+class LoginAttempt(models.Model):
+    # Only a digest is persisted here. Nonce and PKCE verifier live in the DB session.
+    state_digest = models.CharField(max_length=64, unique=True)
+    expires_at = models.DateTimeField(db_index=True)
 
 
 class OvertimePolicy(models.Model):

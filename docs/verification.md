@@ -1,5 +1,28 @@
 # 템플릿 검증 기록
 
+## Entra SSO 구현 검증 (2026-10-25)
+
+`feat/entra-sso`에서 아직 배포하지 않은 신규 서비스 기준으로 구현했다. 기존 `oms-dev` 컨테이너·DB는 변경하지 않고 별도 `oms-sso-test` 프로젝트·DB·볼륨·포트 18001을 사용했다. 테스트 tenant/client/secret은 가짜 값이며 회사 계정이나 실제 테넌트 설정을 변경하지 않았다.
+
+| 항목 | 결과 |
+| --- | --- |
+| ARM64 이미지 | Python 3.12 / Django 5.2.18 / Authlib 1.9.1 / joserfc 1.7.7 / requests 2.34.2, 빌드 및 정적 파일 수집 성공 |
+| PostgreSQL | 초기 마이그레이션부터 `0004`까지 적용 성공 |
+| 전체 테스트 | 기존 업무·권한 32개 + SSO 27개, 총 59개 통과; PostgreSQL에서 생략 없이 실행 |
+| SSO 통신 테스트 | HTTPS 전송만 대체하고 실제 Authlib PKCE·RSA 서명·issuer/audience/nonce/만료 검증 실행 |
+| 동시성 | 기존 제출·결재 2개 + 동시 첫 로그인 사용자 중복 방지·callback 1회 소비 2개 통과 |
+| Gunicorn HTTP | 로그인 화면·비밀번호 로그인 거부·관리자·정적 자산·DB health·CSRF·POST 로그아웃·세션 만료 확인 |
+| 업무 HTTP | 서버 생성 테스트 세션으로 계획·기준 초과 대기·결재·실적·중복 결재 차단·대시보드·로그아웃 통과 |
+| Django 검사 | system check, migration 누락 검사, diff 공백 검사 통과 |
+
+SSO 테스트는 잘못된 서명·issuer·audience·nonce·만료·tenant·Object ID·앱 역할, 필수 claim/ID token 누락, state의 다른 브라우저 사용·만료·재사용, 서명 키 교체, 이메일 변경·누락, 여러 탭의 nonce/복귀 주소 분리와 미완료 흐름 수 제한을 검증한다. 계정 기본 권한·로컬 비밀번호 불가·업무 설정 대기 URL/POST 차단·관리자 부여·세션 버전 차단·절대 만료·업무 활성화와 재활성화 시 기존 세션 거부·로그 가림·보안 쿠키도 포함한다.
+
+HTTP smoke의 인증 세션은 DB 접근이 가능한 테스트 스크립트가 생성한다. 이는 Microsoft 로그인 성공의 증거가 아니며, 웹 우회 로그인 경로는 추가하지 않았다. 로그인 protocol 검증은 가짜 HTTPS 공급자와 서명 토큰을 사용하는 자동 테스트에서 수행한다. 실계정·MFA·앱 할당/해제·실제 secret 교체·Microsoft 로그아웃 및 NAS TLS/프록시는 배포 시 검증해야 한다.
+
+테스트 재현은 개발 Compose에서 `python manage.py test`를 실행하면 된다. 운영 형태 검증은 아래 과거 Docker 절차를 사용하되 `prepare_verification.py`가 생성한 **가짜 Entra 설정으로는 회사 로그인이 불가능**하다. `smoke_workflow.py`는 DEBUG 개발 서버 전용이고 `smoke_container.py`는 신뢰 프록시 헤더를 사용하는 운영 형태 서버 전용이다.
+
+아래 기록은 SSO 도입 전 당시 검증이다. 비밀번호 로그인·수동 계정 생성 관련 설명은 현재 인증 동작에 적용되지 않는다. 현재 설정 절차는 [SSO 운영 문서](entra-sso.md)를 따른다.
+
 ## 핵심 업무 기능 추가 검증 (2026-10-25)
 
 `compose.dev.yaml`로 운영 환경과 분리한 `oms-dev` 프로젝트를 사용했다. Python 패키지 설치·Django 명령·마이그레이션·테스트·HTTP 검증은 모두 Docker 컨테이너 안에서 수행했다. PostgreSQL 개발 데이터는 별도 볼륨에 보존한다.

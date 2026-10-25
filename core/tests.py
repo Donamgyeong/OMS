@@ -4,9 +4,11 @@ from django.test import TestCase
 from django.utils import timezone
 from .models import Department, OvertimePlan, User, WorkRecord
 from .selectors import visible_to
+from .testing import SSOClient
 
 
 class AccessTests(TestCase):
+    client_class = SSOClient
     @classmethod
     def setUpTestData(cls):
         cls.a = Department.objects.create(name="개발")
@@ -16,6 +18,9 @@ class AccessTests(TestCase):
         cls.outsider = User.objects.create_user("outsider", department=cls.b)
         cls.manager = User.objects.create_user("manager", role=User.Role.MANAGER, department=cls.a)
         cls.admin = User.objects.create_user("administrator", role=User.Role.ADMIN)
+        for user in (cls.employee, cls.peer, cls.outsider, cls.manager, cls.admin):
+            user.onboarding_completed = True
+            user.save(update_fields=["onboarding_completed"])
         for user in [cls.employee, cls.peer, cls.outsider]:
             OvertimePlan.objects.create(user=user, department=user.department, work_date=timezone.localdate(),
                 start_time=time(18), end_time=time(20), title="업무", reason="마감")

@@ -1,5 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.views import redirect_to_login
+from django.views.decorators.http import require_GET
+from .authentication import revoke_sessions
 from .models import ApprovalEvent, Department, Holiday, Notification, OvertimePlan, OvertimePolicy, User, WorkRecord, WorkRecordEvent
 
 
@@ -23,9 +26,30 @@ class SuperuserOnly:
 
 @admin.register(User)
 class OMSUserAdmin(SuperuserOnly, UserAdmin):
-    fieldsets = UserAdmin.fieldsets + (("조직·근무 기준", {"fields": ("employee_number", "department", "role", "designated_approver", "daily_work_minutes", "working_weekdays")}),)
-    add_fieldsets = UserAdmin.add_fieldsets + (("조직·근무 기준", {"fields": ("employee_number", "department", "role", "designated_approver", "daily_work_minutes", "working_weekdays")}),)
-    list_display = ("username", "employee_number", "department", "role", "is_active")
+    fieldsets = (
+        ("회사 계정", {"fields": ("username", "first_name", "last_name", "email", "entra_reference")}),
+        ("접근 권한", {"fields": ("is_active", "is_staff", "is_superuser", "onboarding_completed")}),
+        ("조직·근무 기준", {"fields": ("employee_number", "department", "role", "designated_approver", "daily_work_minutes", "working_weekdays")}),
+    )
+    readonly_fields = ("username", "entra_reference")
+    list_display = ("username", "employee_number", "department", "role", "is_active", "onboarding_completed")
+
+    @admin.display(description="Entra ID (tenant / object)")
+    def entra_reference(self, obj):
+        identity = getattr(obj, "entra_identity", None)
+        return f"{identity.tenant_id} / {identity.object_id}" if identity else "SSO 연결 없음"
+
+    def has_add_permission(self, request):
+        return False
+
+    def get_urls(self):
+        return [url for url in super().get_urls() if not (url.name or "").endswith("_password_change")]
+
+    def save_model(self, request, obj, form, change):
+        obj.save(update_fields=[field.name for field in obj._meta.concrete_fields
+            if not field.primary_key and field.name != "auth_version"])
+        if "is_active" in form.changed_data:
+            revoke_sessions(obj.pk)
 
 
 @admin.register(Department)
@@ -92,3 +116,23 @@ class WorkRecordEventAdmin(SuperuserOnly, admin.ModelAdmin):
 
 admin.site.site_header = "OMS 근무 관리"
 admin.site.site_title = "OMS 관리자"
+
+
+@require_GET
+def sso_admin_login(request, extra_context=None):
+    if request.user.is_authenticated:
+        from django.core.exceptions import PermissionDenied
+        raise PermissionDenied("관리자 권한이 필요합니다.")
+    return redirect_to_login(request.GET.get("next", "/admin/"))
+
+
+admin.site.login = sso_admin_login
+
+
+def no_password_change(request, *args, **kwargs):
+    from django.http import Http404
+    raise Http404("비밀번호는 Microsoft 회사 계정에서 관리합니다.")
+
+
+admin.site.password_change = no_password_change
+admin.site.password_change_done = no_password_change

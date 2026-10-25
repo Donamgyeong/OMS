@@ -22,6 +22,7 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware", "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "core.middleware.EntraSessionMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -43,6 +44,44 @@ else:
         "CONN_MAX_AGE": 60,
     }}
 AUTH_USER_MODEL = "core.User"
+AUTHENTICATION_BACKENDS = ["core.authentication.EntraBackend"]
+# Auth flow secrets must remain in server-side sessions, never signed-cookie sessions.
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_AGE = 8 * 60 * 60
+SESSION_SAVE_EVERY_REQUEST = False
+ENTRA_SESSION_SECONDS = SESSION_COOKIE_AGE
+ENTRA_TENANT_ID = os.getenv("ENTRA_TENANT_ID", "").strip()
+ENTRA_CLIENT_ID = os.getenv("ENTRA_CLIENT_ID", "").strip()
+ENTRA_CLIENT_SECRET = os.getenv("ENTRA_CLIENT_SECRET", "").strip()
+ENTRA_REDIRECT_URI = os.getenv("ENTRA_REDIRECT_URI", "").strip()
+ENTRA_ACCESS_ROLE = "OMS.Access"
+ENTRA_LOGOUT_MICROSOFT = os.getenv("ENTRA_LOGOUT_MICROSOFT", "0") == "1"
+ENTRA_POST_LOGOUT_REDIRECT_URI = os.getenv("ENTRA_POST_LOGOUT_REDIRECT_URI", "").strip()
+ENTRA_CONFIGURED = all((ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_REDIRECT_URI))
+if any((ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_REDIRECT_URI)):
+    if not ENTRA_CONFIGURED:
+        raise ImproperlyConfigured("Set all ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_REDIRECT_URI values")
+    from uuid import UUID
+    from urllib.parse import urlsplit
+    try:
+        ENTRA_TENANT_ID = str(UUID(ENTRA_TENANT_ID))
+        ENTRA_CLIENT_ID = str(UUID(ENTRA_CLIENT_ID))
+    except ValueError:
+        raise ImproperlyConfigured("ENTRA_TENANT_ID and ENTRA_CLIENT_ID must be UUIDs") from None
+
+    def validate_entra_uri(value, path):
+        uri = urlsplit(value)
+        local_http = DEBUG and uri.scheme == "http" and uri.hostname in {"localhost", "127.0.0.1"}
+        if (not (uri.scheme == "https" or local_http) or not uri.hostname
+                or uri.path != path or uri.query or uri.fragment or uri.username or uri.password
+                or uri.hostname not in ALLOWED_HOSTS):
+            raise ImproperlyConfigured(f"Entra URI must use an allowed host, HTTPS (except debug localhost), and path {path}")
+
+    validate_entra_uri(ENTRA_REDIRECT_URI, "/accounts/entra/callback/")
+    if ENTRA_LOGOUT_MICROSOFT:
+        validate_entra_uri(ENTRA_POST_LOGOUT_REDIRECT_URI, "/accounts/login/")
+ENTRA_AUTHORITY = f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}"
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},
@@ -69,9 +108,14 @@ SESSION_COOKIE_SECURE = not DEBUG
 CSRF_COOKIE_SECURE = not DEBUG
 SECURE_SSL_REDIRECT = os.getenv("DJANGO_SECURE_SSL_REDIRECT", "0" if DEBUG else "1") == "1"
 SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "no-referrer"
 X_FRAME_OPTIONS = "DENY"
 if os.getenv("DJANGO_TRUST_PROXY", "0") == "1":
     SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 LOGGING = {"version": 1, "disable_existing_loggers": False,
-    "handlers": {"console": {"class": "logging.StreamHandler"}},
+    "filters": {"auth_query": {"()": "core.logging.AuthQueryFilter"}},
+    "handlers": {"console": {"class": "logging.StreamHandler", "filters": ["auth_query"]},
+        "django.server": {"class": "logging.StreamHandler", "filters": ["auth_query"]}},
+    "loggers": {"django.server": {"handlers": ["django.server"], "level": "INFO", "propagate": False},
+        "authlib": {"level": "WARNING"}},
     "root": {"handlers": ["console"], "level": "INFO"}}

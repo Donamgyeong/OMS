@@ -8,9 +8,11 @@ from django.urls import reverse
 from django.utils import timezone
 from .models import Department, Holiday, Notification, OvertimePlan, OvertimePolicy, User, WorkRecord
 from . import services
+from .testing import SSOClient
 
 
 class WorkflowFixture:
+    client_class = SSOClient
     def setUp(self):
         self.department = Department.objects.create(name="개발")
         self.manager = User.objects.create_user("head", role=User.Role.MANAGER, department=self.department)
@@ -20,6 +22,9 @@ class WorkflowFixture:
         self.other_department = Department.objects.create(name="외부")
         self.outsider = User.objects.create_user("outside", department=self.other_department)
         self.admin = User.objects.create_user("viewer", role=User.Role.ADMIN)
+        for user in (self.manager, self.employee, self.outsider, self.admin):
+            user.onboarding_completed = True
+            user.save(update_fields=["onboarding_completed"])
         self.policy = OvertimePolicy.objects.create(effective_from=date(2020, 1, 1), threshold_minutes=960)
 
     def data(self, hours=2, day=date(2026, 11, 2)):
@@ -232,32 +237,35 @@ class WorkflowTests(WorkflowFixture, TestCase):
         self.client.force_login(self.manager)
         self.assertEqual(self.client.get(reverse("plan_action", args=[plan.pk])).status_code, 405)
 
-    def test_configuration_access_and_user_creation(self):
+    def test_configuration_access_and_sso_user_edit(self):
         self.client.force_login(self.employee)
         self.assertEqual(self.client.get("/setup/").status_code, 403)
         self.client.force_login(self.admin)
         self.assertEqual(self.client.get("/setup/").status_code, 200)
-        response = self.client.post("/setup/member/new/", dict(username="newmember", password="Strong-local-778!",
+        member = User.objects.create_user("newmember")
+        response = self.client.post(f"/setup/member/{member.pk}/", dict(username="forged", password="Strong-local-778!",
             department=self.department.pk, role="employee", is_active="on", daily_work_minutes=480,
             working_weekdays="0,1,2,3,4", is_superuser="on", is_staff="on"))
         self.assertEqual(response.status_code, 302)
-        member = User.objects.get(username="newmember")
-        self.assertTrue(member.check_password("Strong-local-778!"))
+        member.refresh_from_db()
+        self.assertEqual(member.username, "newmember")
+        self.assertFalse(member.has_usable_password())
         self.assertFalse(member.is_staff)
         self.assertFalse(member.is_superuser)
         from django.contrib.admin.models import LogEntry
         self.assertTrue(LogEntry.objects.filter(user=self.admin).exists())
-        for kind in ("member", "department", "policy", "holiday"):
+        self.assertEqual(self.client.get("/setup/member/new/").status_code, 404)
+        for kind in ("department", "policy", "holiday"):
             self.assertEqual(self.client.get(f"/setup/{kind}/new/").status_code, 200)
         root = User.objects.create_superuser("root", password="root-password")
         self.assertEqual(self.client.post(f"/setup/member/{root.pk}/", {}).status_code, 403)
 
-    def test_department_cycles_and_weak_password_are_rejected(self):
+    def test_department_cycles_and_local_user_creation_are_rejected(self):
         self.client.force_login(self.admin)
         self.assertContains(self.client.post(f"/setup/department/{self.department.pk}/", dict(
             name="개발", parent=self.department.pk, head=self.manager.pk, active="on")), "순환")
-        self.assertContains(self.client.post("/setup/member/new/", dict(username="weak", password="123",
-            role="employee", daily_work_minutes=480, working_weekdays="0,1,2,3,4")), "errorlist")
+        self.assertEqual(self.client.post("/setup/member/new/", dict(username="weak", password="123",
+            role="employee", daily_work_minutes=480, working_weekdays="0,1,2,3,4")).status_code, 404)
         self.assertFalse(User.objects.filter(username="weak").exists())
 
     def test_department_transfer_does_not_leak_new_department_records(self):
@@ -280,12 +288,11 @@ class WorkflowTests(WorkflowFixture, TestCase):
         self.assertTrue(record.unapproved_at_entry)
 
     def test_csrf_and_filter_do_not_change_own_remaining(self):
-        from django.test import Client
         self.submit(2)
         self.client.force_login(self.employee)
         response = self.client.get("/?month=2026-11&status=rejected")
         self.assertEqual(response.context["own_total"], 120)
-        csrf_client = Client(enforce_csrf_checks=True)
+        csrf_client = SSOClient(enforce_csrf_checks=True)
         csrf_client.force_login(self.employee)
         self.assertEqual(csrf_client.post("/plans/new/", {}).status_code, 403)
 

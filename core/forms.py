@@ -55,27 +55,14 @@ class DecisionForm(forms.Form):
 
 
 class MemberForm(forms.ModelForm):
-    password = forms.CharField(label="비밀번호", required=False, widget=forms.PasswordInput,
-        help_text="신규 계정은 필수입니다. 기존 계정은 비워 두면 유지됩니다.")
-
     class Meta:
         model = User
-        fields = ("username", "first_name", "last_name", "email", "employee_number", "department", "role",
-                  "is_active", "designated_approver", "daily_work_minutes", "working_weekdays")
+        fields = ("first_name", "last_name", "email", "employee_number", "department", "role",
+                  "is_active", "designated_approver", "daily_work_minutes", "working_weekdays", "onboarding_completed")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["password"].required = not self.instance.pk
         self.fields["designated_approver"].queryset = User.objects.filter(is_active=True).exclude(pk=self.instance.pk)
-
-    def clean_password(self):
-        from django.contrib.auth.password_validation import validate_password
-        password = self.cleaned_data.get("password")
-        if password:
-            # Use the entered identity when checking password similarity.
-            identity = User(**{name: self.cleaned_data.get(name, "") for name in ("username", "first_name", "last_name", "email")})
-            validate_password(password, identity)
-        return password
 
 
 class DepartmentForm(forms.ModelForm):

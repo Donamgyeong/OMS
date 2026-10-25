@@ -27,6 +27,7 @@ NAS의 전용 프로젝트 폴더(예: `/volume1/docker/oms`)에 `compose.yaml`�
 - 실제 서비스 도메인을 ALLOWED_HOSTS와 CSRF_TRUSTED_ORIGINS에 설정한다. healthcheck를 위해 localhost도 유지한다.
 - DEBUG=0, HTTPS 관련 설정을 유지한다.
 - `.env`의 파일 접근 권한은 운영 담당자로 제한한다.
+- [Entra 앱 등록·역할 할당](entra-sso.md)을 완료하고 `ENTRA_TENANT_ID`, `ENTRA_CLIENT_ID`, `ENTRA_CLIENT_SECRET`, `ENTRA_REDIRECT_URI`를 설정한다. 미설정 시 운영 시작 검사가 실패한다.
 - 새 DB에서만 POSTGRES_* 초기 계정 설정이 적용된다. 기존 볼륨의 비밀번호는 환경변수 변경만으로 바뀌지 않는다.
 
 ## 3. DSM 리버스 프록시
@@ -46,7 +47,6 @@ DSM 로그인 포털의 고급 설정에서 HTTPS 도메인(443)을 `http://127.
 ```sh
 docker compose up -d db
 docker compose run --rm app python manage.py migrate
-docker compose run --rm app python manage.py createsuperuser
 docker compose run --rm app python manage.py check --deploy
 docker compose up -d app
 docker compose ps
@@ -55,9 +55,15 @@ docker compose logs --tail=100 app
 
 DB 초기화 직후 준비될 때까지 기다린 후 migrate를 실행한다. 환경에 따라 `docker compose` 대신 `docker-compose`가 제공될 수 있다.
 
-관리자 페이지에서 부서·사용자·정책을 만든다. 현재는 템플릿 단계이므로 운영 업무를 시작하기 전에 README의 미구현 범위를 완성해야 한다.
+최초 관리자가 회사 계정으로 로그인한 뒤 아래 명령으로 권한을 부여한다. 사용자 Object ID는 Entra에서 확인한다.
 
-`check --deploy`의 HSTS 경고는 HTTPS·도메인 운영을 확인한 후 적용 여부를 결정한다. HSTS는 현재 기본 설정에 넣지 않았다. 로그인 시도 제한 또한 운영 전 추가해야 한다.
+```sh
+docker compose exec app python manage.py bootstrap_entra_admin <사용자-Object-ID> --superuser
+```
+
+기초정보 관리에서 부서·직원 업무 정보·승인자·정책을 설정한다. 직원은 첫 SSO 로그인으로 생성되며, 사번·활성 부서·승인자 설정 후 업무 설정 완료를 체크한다. 전체 절차와 차단·복구 명령은 [SSO 운영 문서](entra-sso.md)를 참고한다.
+
+`check --deploy`의 HSTS 경고는 HTTPS·도메인 운영을 확인한 후 적용 여부를 결정한다. HSTS는 현재 기본 설정에 넣지 않았다. MFA와 로그인 보호는 Entra 정책을 설정하고, 프록시 로그에서도 callback query string을 제외한다.
 
 ## 5. 업데이트
 

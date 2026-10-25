@@ -4,3 +4,6 @@ class CoreConfig(AppConfig):
     default_auto_field = "django.db.models.BigAutoField"
     name = "core"
     verbose_name = "근무 관리"
+
+    def ready(self):
+        from . import checks  # noqa: F401

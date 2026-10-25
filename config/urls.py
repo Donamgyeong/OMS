@@ -1,12 +1,14 @@
 from django.contrib import admin
-from django.contrib.auth import views as auth_views
 from django.urls import path
-from core import views
+from core import auth_views, views
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("accounts/login/", auth_views.LoginView.as_view(), name="login"),
-    path("accounts/logout/", auth_views.LogoutView.as_view(), name="logout"),
+    path("accounts/login/", auth_views.login_page, name="login"),
+    path("accounts/entra/login/", auth_views.entra_login, name="entra_login"),
+    path("accounts/entra/callback/", auth_views.entra_callback, name="entra_callback"),
+    path("accounts/onboarding/", auth_views.onboarding, name="onboarding"),
+    path("accounts/logout/", auth_views.logout_view, name="logout"),
     path("health/", views.health, name="health"),
     path("", views.dashboard, name="dashboard"),
     path("plans/new/", views.plan_edit, name="plan_create"),

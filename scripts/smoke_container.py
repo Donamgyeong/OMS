@@ -22,6 +22,7 @@ import django
 django.setup()
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from smoke_sessions import create_session
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -75,20 +76,18 @@ if __name__ == "__main__":
     for asset in assets:
         status, _, _ = request(asset)
         check(status == 200, "static asset " + asset)
-    csrf = re.search(r'name="csrfmiddlewaretoken" value="([^\"]+)"', body).group(1)
+    check('type="password"' not in body, "no local password login form")
     status, _, _ = request("/accounts/login/", {"username": "invalid", "password": "invalid"})
-    check(status == 403, "CSRF protection rejects missing token")
+    check(status in (403, 405), "local password login is rejected")
     username = "verify_" + secrets.token_hex(6)
-    password = secrets.token_urlsafe(32)
-    user = get_user_model().objects.create_superuser(username=username, password=password)
+    user = get_user_model().objects.create_superuser(username=username, onboarding_completed=True)
+    session = create_session(user)
+    cookies[settings.SESSION_COOKIE_NAME] = session.session_key
     try:
-        status, _, _ = request("/accounts/login/", {"username": username,
-            "password": password, "csrfmiddlewaretoken": csrf})
-        check(status == 302 and bool(cookies.get("sessionid")), "real HTTP session login")
-        check(bool(cookies["sessionid"]["secure"]) and bool(cookies["sessionid"]["httponly"]),
-            "session cookie Secure and HttpOnly flags")
         status, _, body = request("/")
-        check(status == 200 and username in body, "authenticated dashboard")
+        check(status == 200 and username in body, "authenticated dashboard with server-created session fixture")
+        status, _, _ = request("/accounts/logout/", {})
+        check(status == 403, "logout rejects missing CSRF token")
         status, _, _ = request("/admin/")
         check(status == 200, "superuser administration page")
         with tempfile.NamedTemporaryFile(dir=settings.MEDIA_ROOT, prefix="verify-", delete=True) as handle:
@@ -97,8 +96,11 @@ if __name__ == "__main__":
         check(True, "media volume writable by application user")
         status, _, _ = request("/accounts/logout/", {"csrfmiddlewaretoken": cookies["csrftoken"].value})
         check(status == 302, "POST logout")
+        check(cookies[settings.SESSION_COOKIE_NAME]["max-age"] == "0",
+            "logout expires the browser session cookie")
         status, _, _ = request("/")
         check(status == 302, "logout invalidates session")
     finally:
+        session.delete()
         user.delete()
-    print("All production HTTP smoke checks passed; temporary account removed.")
+    print("Production HTTP smoke checks passed with server-created session fixture; Entra login not exercised. Temporary account removed.")

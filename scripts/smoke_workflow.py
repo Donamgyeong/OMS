@@ -4,7 +4,7 @@ import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
-from secrets import token_hex, token_urlsafe
+from secrets import token_hex
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import HTTPCookieProcessor, build_opener
@@ -16,6 +16,7 @@ django.setup()
 from django.conf import settings
 from core.models import (ApprovalEvent, Department, Notification, OvertimePlan,
     OvertimePolicy, User, WorkRecord, WorkRecordEvent)
+from smoke_sessions import create_session
 
 if not settings.DEBUG:
     raise SystemExit("Run only against the isolated development container, with DEBUG enabled.")
@@ -27,6 +28,7 @@ class Session:
     def __init__(self):
         self.jar = http.cookiejar.CookieJar()
         self.opener = build_opener(HTTPCookieProcessor(self.jar))
+        self.fixture = None
 
     def get(self, path):
         return self.opener.open(BASE + path, timeout=10)
@@ -37,15 +39,18 @@ class Session:
             values["csrfmiddlewaretoken"] = next(cookie.value for cookie in self.jar if cookie.name == "csrftoken")
         return self.opener.open(BASE + path, data=urlencode(values).encode(), timeout=10)
 
-    def login(self, username, password):
-        self.get("/accounts/login/").close()
-        with self.post("/accounts/login/", dict(username=username, password=password)) as response:
-            assert response.geturl() == BASE + "/"
+    def login_fixture(self, user):
+        self.fixture = create_session(user)
+        self.jar.set_cookie(http.cookiejar.Cookie(0, settings.SESSION_COOKIE_NAME,
+            self.fixture.session_key, None, False, "127.0.0.1", False, False,
+            "/", True, False, None, True, None, None, {}))
+        self.get("/").close()
 
 
 tag = token_hex(6)
 department = policy = None
 users = []
+http_sessions = []
 try:
     day = date(2098, 1, 1)
     while OvertimePolicy.objects.filter(effective_from=day).exists():
@@ -54,16 +59,16 @@ try:
     while day.weekday() != 0:
         day += timedelta(days=1)
     department = Department.objects.create(name=f"HTTP 검증 {tag}")
-    password = token_urlsafe(24)
-    manager = User.objects.create_user(f"smoke_head_{tag}", password=password, department=department, role="manager")
+    manager = User.objects.create_user(f"smoke_head_{tag}", department=department, role="manager", onboarding_completed=True)
     users.append(manager)
-    member = User.objects.create_user(f"smoke_member_{tag}", password=password, department=department)
+    member = User.objects.create_user(f"smoke_member_{tag}", department=department, onboarding_completed=True)
     users.append(member)
     department.head = manager
     department.save()
     employee_session, manager_session = Session(), Session()
-    employee_session.login(member.username, password)
-    manager_session.login(manager.username, password)
+    http_sessions = [employee_session, manager_session]
+    employee_session.login_fixture(member)
+    manager_session.login_fixture(manager)
     with employee_session.get("/health/") as response:
         assert response.status == 200
     with employee_session.get("/static/css/app.css") as response:
@@ -99,8 +104,11 @@ try:
     employee_session.post("/accounts/logout/", {}).close()
     with employee_session.get("/") as response:
         assert "/accounts/login/" in response.geturl()
-    print("HTTP workflow passed: login, static, health, exact threshold, pending, inbox, actual, approval, duplicate protection, dashboard, CSRF, logout.")
+    print("HTTP workflow passed with server-created session fixtures (Entra login not exercised): static, health, exact threshold, pending, inbox, actual, approval, duplicate protection, dashboard, CSRF, logout.")
 finally:
+    for session in http_sessions:
+        if session.fixture:
+            session.fixture.delete()
     plans = OvertimePlan.objects.filter(user__in=users)
     records = WorkRecord.objects.filter(user__in=users)
     Notification.objects.filter(plan__in=plans).delete()

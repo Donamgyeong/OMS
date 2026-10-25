@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<section class="login"><h1>업무 설정 대기</h1><p>회사 계정 로그인이 완료되었습니다. 관리자가 부서·근무 기준·승인자를 설정하면 OMS를 이용할 수 있습니다.</p><p>관리자에게 아래 계정 정보를 알려주세요.</p><dl><dt>이름</dt><dd>{{ user.get_full_name|default:user.username }}</dd><dt>계정 식별자</dt><dd>{{ user.username }}</dd></dl><a href="{% url 'dashboard' %}">설정 완료 확인</a></section>{% endblock %}
