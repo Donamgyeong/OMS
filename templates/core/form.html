@@ -1,0 +1,7 @@
+{% extends 'base.html' %}{% load oms %}{% block content %}<h1>{{ heading }}</h1>
+{% if is_plan %}<p>임시 저장은 월 누적에 포함되지 않습니다. 확정 계획을 변경하면 다시 제출해야 합니다.</p>{% elif not is_setup %}<p>하루 전체 출퇴근 시간을 입력하세요. 소정근무 요일·시간과 등록된 휴일로 실제 초과 근무를 계산합니다. 같은 날짜는 기존 기록을 수정하세요.</p>{% endif %}
+<form method="post" class="editor">{% csrf_token %}{{ form.as_p }}
+{% if is_plan %}<div class="toolbar"><button name="intent" value="preview">제출 전 계산</button><button name="intent" value="save">임시 저장</button><button name="intent" value="submit">제출</button></div>{% else %}<button>저장</button>{% endif %}</form>
+{% if preview %}<section class="notice"><h2>제출 예상</h2><p>이번 신청 {{ preview.duration_minutes|duration }} · {{ preview.get_status_display }}{% if preview.approver %} · 승인자 {{ preview.approver }}{% endif %}</p>
+{% for month,item in preview.monthly_snapshot.items %}<p>{{ month }}: 현재 누적 {{ item.previous|duration }} + 신청 {{ item.requested|duration }} = 제출 후 {{ item.total|duration }} / 기준 {{ item.threshold|duration }} · 제출 후 남은 무승인 시간 {{ item.remaining|duration }}</p>{% endfor %}<p>실제 제출 시 최신 누적과 정책으로 다시 계산합니다.</p></section>{% endif %}
+{% endblock %}

@@ -1,6 +1,6 @@
 # OMS · 초과 근무 사전 승인 시스템
 
-Synology DS423에서 실행하기 위한 Django 기반 프로젝트 템플릿.
+Synology DS423에서 실행하기 위한 Django 기반 초과 근무 사전 승인 시스템.
 
 ## 구성
 
@@ -11,39 +11,40 @@ Synology DS423에서 실행하기 위한 Django 기반 프로젝트 템플릿.
 
 ## 구현 범위
 
-- 커스텀 사용자, 부서, 초과 근무 정책, 계획, 결재 이력, 실적 모델 및 초기 마이그레이션
-- 로그인·POST 로그아웃, 이번 달 대시보드, 개인·부서·전체 조회 범위
-- 슈퍼유저 전용 기초정보 관리 및 임시 계획·실적 입력
+- 사용자·부서·부서장·지정 승인자·정책·휴일·사용자별 소정근무 기준 관리
+- 직원용 계획 입력, 제출 전 계산, 임시 저장·제출·회수·수정·재기안·취소
+- 월별 누적 계산, 기준 이내 무승인 확정, 기준 초과 시 지정 부서장 결재함으로 전달
+- 승인·반려, 사유 및 변경 전후 이력, 시스템 내 결과 알림
+- 실제 출퇴근 수동 입력, 소정근무·휴일에 따른 초과 근무 자동 계산, 계획 연결·차이 조회
+- 월·부서·사용자·계획 상태·실적 등록 여부 검색, 개인·부서·전체 조회 범위
 - DB 연결을 확인하는 `/health/`, 컨테이너 영구 볼륨, 운영 보안 설정
 
-아직 실제 운영용 완성 시스템은 아니다. 계획 제출·회수·결재 서비스, 월 16시간 동시성 제어, 정책 적용, 승인자 지정, 직원용 입력 화면, 변경 이력, 조직 이력, 알림, API 연동, 로그인 시도 제한은 후속 구현 대상이다. 현재 정책과 결재 모델은 데이터 구조만 제공하며 승인 판단을 수행하지 않는다. 초과 근무 실적은 수동 입력하고 근무 일정 기반 자동 계산은 추후 구현한다.
+기획의 2단계 핵심 기능을 구현했다. PostgreSQL 사용자 행 잠금으로 동시 제출·결재를 직렬화하고, 버전 확인으로 오래된 화면의 수정과 중복 결재를 막는다. 승인 대기 시간을 누적에 포함하며 정책·누적·소속·승인자와 변경 이력을 보존한다. 야간·월 경계 계획은 일별·월별 배분하며, 휴게 시간은 근무 구간 끝에서 차감한다.
 
-일반 관리자 역할은 전체 업무 조회 권한이다. Django Admin 접근은 별도의 슈퍼유저로 제한한다. Admin은 초기 설정용이며 일반 직원·부서장 업무 화면을 대신하지 않는다.
+일반 관리자 역할은 전체 조회 및 `/setup/` 기초정보 관리 권한이다. 결재는 해당 계획의 지정 승인자만 가능하며 자기 결재는 차단한다. Django Admin은 슈퍼유저 전용이고 업무 데이터는 읽기 전용이다. 업무 입력은 직원 화면에서 수행한다.
 
-## 로컬 실행 (PowerShell)
+기간별 조직·근무 유형 관리, 대결·마감, 엑셀 다운로드, 장기 미처리 알림, 외부 API·사내 로그인·메신저 연동, 로그인 시도 제한은 후속 범위다. 상세 사용법과 현재 입력 기준은 [docs/core-workflow.md](docs/core-workflow.md)를 참고한다.
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-$env:DJANGO_DEBUG='1'
-$env:DJANGO_USE_SQLITE='1'
-.\.venv\Scripts\python.exe manage.py migrate
-.\.venv\Scripts\python.exe manage.py createsuperuser
-.\.venv\Scripts\python.exe manage.py runserver
+## Docker 개발 환경
+
+Docker Desktop 또는 Docker Engine과 Compose를 사용한다. 호스트 Python 설치는 필요 없다. 운영 Compose와 DB 볼륨을 분리한 개발 설정이다.
+
+```sh
+docker compose -p oms-dev -f compose.dev.yaml up -d --build --wait
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py migrate
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py createsuperuser
 ```
 
-`http://127.0.0.1:8000/`에서 로그인, `/admin/`에서 부서·사용자·정책을 등록한다. 부서장 생성 후 부서의 head를 지정할 수 있다. 개발용 SQLite는 PostgreSQL의 동시성·잠금 검증을 대체하지 않는다. `.env`는 Compose가 읽으며 로컬 Python에서는 환경변수를 직접 설정해야 한다.
+`http://127.0.0.1:18000/`에서 로그인하고 **기초정보 관리**에서 부서 → 사용자 → 부서장 → 정책 순으로 등록한다. 부서장 본인 신청은 사용자 정보의 지정 승인자 또는 상위 부서장을 설정한다. 정책은 적용 시작일과 기준(기본 960분)을 등록해야 제출할 수 있다.
 
-venv 생성 시 ensurepip 오류가 발생하는 PC에서는 `python -m venv --without-pip .venv`로 생성하고, 전역 pip가 있다면 `python -m pip --python .\.venv\Scripts\python.exe install -r requirements.txt`로 설치한다.
+코드는 바인드 마운트되므로 수정 시 서버가 자동 재시작된다. 개발 DB는 `oms-dev_dev_db` 볼륨에 보존된다. `docker compose -p oms-dev -f compose.dev.yaml stop`으로 중지한다. 개발용 고정 비밀값과 HTTP 설정은 NAS 운영에 사용하지 않는다.
 
 ## 검증
 
-```powershell
-$env:DJANGO_DEBUG='1'
-$env:DJANGO_USE_SQLITE='1'
-.\.venv\Scripts\python.exe manage.py check
-.\.venv\Scripts\python.exe manage.py makemigrations --check --dry-run
-.\.venv\Scripts\python.exe manage.py test
+```sh
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py check
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py makemigrations --check --dry-run
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py test
 ```
 
 NAS 설치·배포·백업 절차: [docs/deployment-synology.md](docs/deployment-synology.md)

@@ -1,0 +1,35 @@
+services:
+  db:
+    image: postgres:17-bookworm
+    environment:
+      POSTGRES_DB: oms_dev
+      POSTGRES_USER: oms_dev
+      POSTGRES_PASSWORD: local-development-only
+    volumes:
+      - dev_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oms_dev -d oms_dev"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  app:
+    build: .
+    environment:
+      DJANGO_DEBUG: "1"
+      DJANGO_SECRET_KEY: container-development-only
+      DJANGO_ALLOWED_HOSTS: localhost,127.0.0.1,testserver
+      DJANGO_SECURE_SSL_REDIRECT: "0"
+      POSTGRES_HOST: db
+      POSTGRES_DB: oms_dev
+      POSTGRES_USER: oms_dev
+      POSTGRES_PASSWORD: local-development-only
+    volumes:
+      - .:/app
+    ports:
+      - "127.0.0.1:18000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8000"]
+volumes:
+  dev_db:

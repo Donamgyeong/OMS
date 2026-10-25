@@ -1,0 +1,8 @@
+{% extends 'base.html' %}{% load oms %}{% block content %}<h1>{{ record.work_date }} 근무 실적</h1><p>{{ record.user }} · {{ record.department }} · {{ record.get_source_display }}</p>
+<p>{{ record.started_at }} ~ {{ record.ended_at }} · 휴게 {{ record.break_minutes|duration }}</p><p>실제 근무 {{ record.duration_minutes|duration }} · 실제 초과 근무 {{ record.overtime_minutes|duration }}</p>
+{% if record.plan %}<p>연결 계획: <a href="{% url 'plan_detail' record.plan_id %}">{{ record.plan }}</a> · 계획 {{ record.plan.duration_minutes|duration }}</p>{% elif record.overtime_minutes %}<p class="notice">미계획 실적</p>{% endif %}
+{% if record.unapproved_at_entry %}<p class="notice">등록 당시 사전 승인 미완료</p>{% endif %}
+<div class="prose">{{ record.description|linebreaks }}{{ record.exception_reason|linebreaks }}</div>
+{% for day,value in record.daily_minutes.items %}<p>{{ day }}: 실제 {{ value.worked|duration }} · 소정 {{ value.standard|duration }} · 초과 {{ value.overtime|duration }}</p>{% endfor %}
+{% if record.user_id == user.pk %}<a href="{% url 'record_edit' record.pk %}">실적 수정</a>{% endif %}
+<h2>등록 · 수정 이력</h2>{% for item in events %}<details><summary>{{ item.created_at }} · {{ item.actor }} · {{ item.reason }}</summary><div class="table-wrap"><table><thead><tr><th>항목</th><th>변경 전</th><th>변경 후</th></tr></thead><tbody>{% for change in item.changes %}<tr><td>{{ change.label }}</td><td class="wrap">{{ change.before }}</td><td class="wrap">{{ change.after }}</td></tr>{% endfor %}</tbody></table></div></details>{% endfor %}{% endblock %}

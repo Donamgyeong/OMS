@@ -1,5 +1,34 @@
 # 템플릿 검증 기록
 
+## 핵심 업무 기능 추가 검증 (2026-10-25)
+
+`compose.dev.yaml`로 운영 환경과 분리한 `oms-dev` 프로젝트를 사용했다. Python 패키지 설치·Django 명령·마이그레이션·테스트·HTTP 검증은 모두 Docker 컨테이너 안에서 수행했다. PostgreSQL 개발 데이터는 별도 볼륨에 보존한다.
+
+| 항목 | 결과 |
+|---|---|
+| 컨테이너 이미지 빌드 | ARM64 Python 3.12 / Django 5.2.18, 정적 파일 수집 성공 |
+| DB | PostgreSQL 17, 초기 및 추가 마이그레이션 적용 성공 |
+| Django 검사 | `check`, `makemigrations --check --dry-run` 통과 |
+| 자동 테스트 | 기존 6개 + 업무 흐름 24개 + PostgreSQL 동시성 2개, 총 32개 통과 |
+| 실제 HTTP | 로그인, 정적 파일, health, 16시간 확정, 기준 초과 대기, 결재함, 실적 입력, 승인, 중복 결재 차단, 대시보드, CSRF 차단, 로그아웃 확인 |
+
+자동 테스트는 임시·반려·취소의 누적 제외, 수정 시 자기 시간 제외, 회수·재제출, 적용일별 정책·판단 보존, 자기 결재 및 일반 관리자 결재 차단, 부서장 본인의 지정 승인자, 부서 이동 후 기존 결재 유지와 타 부서 조회 차단, 월 경계 배분, 휴일·수동 실적 계산, 미계획·초과 수행 사유, 수정 이력, 중복 날짜, 소급 승인 표시, 기초정보 권한·비밀번호 검증·권한 상승 차단, 구버전 실적 보존을 포함한다.
+
+동시성 테스트는 각각 별도 PostgreSQL 연결 두 개를 동시에 시작한다. 기존 15시간에서 1시간 신청 두 건을 동시 제출하면 하나만 무승인 확정되고 나머지는 승인 대기가 된다. 같은 계획의 동시 결재는 한 건만 처리되고 다른 요청은 오래된 버전으로 거절된다. SQLite 결과로 대체하지 않았다.
+
+```sh
+docker compose -p oms-dev -f compose.dev.yaml up -d --build --wait
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py migrate --noinput
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py check
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py makemigrations --check --dry-run
+docker compose -p oms-dev -f compose.dev.yaml exec app python manage.py test --noinput
+docker compose -p oms-dev -f compose.dev.yaml exec app python scripts/smoke_workflow.py
+```
+
+HTTP 검증 스크립트는 개발 설정에서만 실행된다. 매번 고유한 임시 계정·부서·미래 적용 정책을 만들고 `finally`에서 자신이 생성한 업무 데이터와 함께 정리한다. 기존 사용자와 업무 데이터는 유지한다. 초기 관리자 비밀번호는 문서·소스에 저장하지 않는다.
+
+NAS 실기기, 운영 TLS·리버스 프록시, 백업·복구 및 부하 검증은 여전히 배포 환경에서 필요하다. 아래 2026-10-23 기록은 핵심 업무 기능을 추가하기 전의 초기 템플릿 검증이다.
+
 검증일: 2026-10-23
 
 ## 완료

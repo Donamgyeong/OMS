@@ -1,6 +1,8 @@
 from django.contrib.auth.models import AbstractUser
 from django.core.exceptions import ValidationError
 from django.db import models
+from django.utils import timezone
+from datetime import datetime, timedelta
 
 
 class Department(models.Model):
@@ -12,6 +14,18 @@ class Department(models.Model):
     def __str__(self):
         return self.name
 
+    def clean(self):
+        super().clean()
+        visited = {self.pk} if self.pk else set()
+        node = self.parent
+        while node:
+            if node.pk in visited:
+                raise ValidationError("부서의 상하위 관계가 순환할 수 없습니다.")
+            visited.add(node.pk)
+            node = node.parent
+        if self.head_id and (not self.head.is_active or self.head.department_id != self.pk):
+            raise ValidationError("부서장은 해당 부서의 활성 사용자여야 합니다.")
+
 
 class User(AbstractUser):
     class Role(models.TextChoices):
@@ -22,6 +36,16 @@ class User(AbstractUser):
     employee_number = models.CharField("사번", max_length=30, unique=True, null=True, blank=True)
     department = models.ForeignKey(Department, null=True, blank=True, on_delete=models.PROTECT)
     role = models.CharField("역할", max_length=20, choices=Role.choices, default=Role.EMPLOYEE)
+    designated_approver = models.ForeignKey("self", null=True, blank=True, on_delete=models.SET_NULL, related_name="approval_members", verbose_name="지정 승인자")
+    daily_work_minutes = models.PositiveIntegerField("일 소정근무(분)", default=480)
+    working_weekdays = models.CharField("근무 요일(월=0, 일=6)", max_length=13, default="0,1,2,3,4")
+
+    def clean(self):
+        super().clean()
+        if self.designated_approver_id and self.designated_approver_id == self.pk:
+            raise ValidationError("본인을 지정 승인자로 설정할 수 없습니다.")
+        if not self.working_weekdays or any(day not in "0123456" or len(day) != 1 for day in self.working_weekdays.split(",")):
+            raise ValidationError("근무 요일은 0~6을 쉼표로 구분하세요.")
 
 
 class OvertimePolicy(models.Model):
@@ -47,6 +71,7 @@ class OvertimePlan(models.Model):
     user = models.ForeignKey(User, on_delete=models.PROTECT)
     department = models.ForeignKey(Department, on_delete=models.PROTECT)
     work_date = models.DateField("근무 예정일")
+    end_date = models.DateField("종료일", null=True, blank=True)
     start_time = models.TimeField("시작")
     end_time = models.TimeField("종료")
     break_minutes = models.PositiveIntegerField("휴게(분)", default=0)
@@ -57,6 +82,11 @@ class OvertimePlan(models.Model):
     approver = models.ForeignKey(User, null=True, blank=True, on_delete=models.PROTECT, related_name="assigned_plans")
     submitted_total_minutes = models.PositiveIntegerField(null=True, blank=True)
     threshold_snapshot = models.PositiveIntegerField(null=True, blank=True)
+    policy_snapshot = models.JSONField(default=dict, blank=True)
+    monthly_snapshot = models.JSONField(default=dict, blank=True)
+    version = models.PositiveIntegerField(default=1)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    is_retrospective = models.BooleanField("사후 등록", default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -66,12 +96,14 @@ class OvertimePlan(models.Model):
 
     def clean(self):
         super().clean()
-        if self.start_time and self.end_time:
-            start = self.start_time.hour * 60 + self.start_time.minute
-            end = self.end_time.hour * 60 + self.end_time.minute
-            minutes = end - start - (self.break_minutes or 0)
+        if self.work_date and self.start_time and self.end_time:
+            start = datetime.combine(self.work_date, self.start_time)
+            end = datetime.combine(self.end_date or self.work_date, self.end_time)
+            minutes = int((end - start).total_seconds() // 60) - (self.break_minutes or 0)
             if minutes <= 0:
-                raise ValidationError("종료는 시작 이후여야 하며 휴게를 제외한 시간이 양수여야 합니다. 야간·월 경계는 날짜별로 나누어 등록하세요.")
+                raise ValidationError("종료는 시작 이후여야 하며 휴게를 제외한 시간이 양수여야 합니다.")
+            if (end - start) > timedelta(days=7):
+                raise ValidationError("한 계획은 최대 7일까지 입력하세요.")
             self.duration_minutes = minutes
 
     def save(self, *args, **kwargs):
@@ -87,6 +119,8 @@ class ApprovalEvent(models.Model):
     actor = models.ForeignKey(User, on_delete=models.PROTECT)
     result = models.CharField(max_length=20, choices=OvertimePlan.Status.choices)
     comment = models.TextField(blank=True)
+    version = models.PositiveIntegerField(default=1)
+    snapshot = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
 
@@ -102,6 +136,11 @@ class WorkRecord(models.Model):
     ended_at = models.DateTimeField("퇴근")
     break_minutes = models.PositiveIntegerField("휴게(분)", default=0)
     overtime_minutes = models.PositiveIntegerField("실제 초과 근무(분)", default=0)
+    duration_minutes = models.PositiveIntegerField("실제 근무(분)", default=0, editable=False)
+    daily_minutes = models.JSONField(default=dict, blank=True)
+    exception_reason = models.TextField("미계획·초과 수행 사유", blank=True)
+    unapproved_at_entry = models.BooleanField(default=False)
+    version = models.PositiveIntegerField(default=1)
     plan = models.ForeignKey(OvertimePlan, null=True, blank=True, on_delete=models.PROTECT)
     description = models.TextField("업무 내용", blank=True)
     source = models.CharField(max_length=10, choices=Source.choices, default=Source.MANUAL)
@@ -120,6 +159,11 @@ class WorkRecord(models.Model):
             net = (self.ended_at - self.started_at).total_seconds() / 60 - (self.break_minutes or 0)
             if net <= 0 or self.overtime_minutes > net:
                 raise ValidationError("실제 근무 시간과 초과 근무 시간을 확인하세요.")
+            self.duration_minutes = int(net)
+            if timezone.localtime(self.started_at).date() != self.work_date:
+                raise ValidationError("근무일은 출근 날짜와 같아야 합니다.")
+            if self.ended_at - self.started_at > timedelta(days=7):
+                raise ValidationError("한 근무 기록은 최대 7일까지 입력하세요.")
         if self.plan_id and self.plan.user_id != self.user_id:
             raise ValidationError("다른 사용자의 계획을 연결할 수 없습니다.")
         if self.external_id and not self.external_system:
@@ -128,3 +172,27 @@ class WorkRecord(models.Model):
     def save(self, *args, **kwargs):
         self.full_clean()
         return super().save(*args, **kwargs)
+
+
+class Holiday(models.Model):
+    date = models.DateField("휴일", unique=True)
+    name = models.CharField("이름", max_length=100)
+
+    def __str__(self):
+        return f"{self.date} {self.name}"
+
+
+class WorkRecordEvent(models.Model):
+    record = models.ForeignKey(WorkRecord, on_delete=models.PROTECT, related_name="events")
+    actor = models.ForeignKey(User, on_delete=models.PROTECT)
+    reason = models.TextField()
+    snapshot = models.JSONField(default=dict)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+
+class Notification(models.Model):
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    plan = models.ForeignKey(OvertimePlan, on_delete=models.PROTECT, null=True, blank=True)
+    message = models.CharField(max_length=250)
+    created_at = models.DateTimeField(auto_now_add=True)
+    read = models.BooleanField(default=False)

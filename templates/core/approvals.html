@@ -1,0 +1,1 @@
+{% extends 'base.html' %}{% block content %}<h1>결재함</h1><h2>승인 대기</h2>{% include 'core/plan_table.html' with plans=pending %}<h2>처리 · 회수 내역</h2>{% include 'core/plan_table.html' with plans=processed %}{% endblock %}

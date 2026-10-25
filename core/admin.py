@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from .models import ApprovalEvent, Department, OvertimePlan, OvertimePolicy, User, WorkRecord
+from .models import ApprovalEvent, Department, Holiday, Notification, OvertimePlan, OvertimePolicy, User, WorkRecord, WorkRecordEvent
 
 
 class SuperuserOnly:
@@ -23,8 +23,8 @@ class SuperuserOnly:
 
 @admin.register(User)
 class OMSUserAdmin(SuperuserOnly, UserAdmin):
-    fieldsets = UserAdmin.fieldsets + (("조직", {"fields": ("employee_number", "department", "role")}),)
-    add_fieldsets = UserAdmin.add_fieldsets + (("조직", {"fields": ("employee_number", "department", "role")}),)
+    fieldsets = UserAdmin.fieldsets + (("조직·근무 기준", {"fields": ("employee_number", "department", "role", "designated_approver", "daily_work_minutes", "working_weekdays")}),)
+    add_fieldsets = UserAdmin.add_fieldsets + (("조직·근무 기준", {"fields": ("employee_number", "department", "role", "designated_approver", "daily_work_minutes", "working_weekdays")}),)
     list_display = ("username", "employee_number", "department", "role", "is_active")
 
 
@@ -42,10 +42,13 @@ class PolicyAdmin(SuperuserOnly, admin.ModelAdmin):
 class PlanAdmin(SuperuserOnly, admin.ModelAdmin):
     list_display = ("user", "work_date", "title", "duration_minutes", "status")
     list_filter = ("status", "department", "work_date")
-    readonly_fields = ("status", "approver", "submitted_total_minutes", "threshold_snapshot", "created_at", "updated_at")
+    readonly_fields = tuple(field.name for field in OvertimePlan._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
 
     def has_change_permission(self, request, obj=None):
-        return request.user.is_superuser and (obj is None or obj.status == OvertimePlan.Status.DRAFT)
+        return False
 
 
 @admin.register(WorkRecord)
@@ -53,10 +56,32 @@ class RecordAdmin(SuperuserOnly, admin.ModelAdmin):
     list_display = ("user", "work_date", "overtime_minutes", "source")
     list_filter = ("department", "source", "work_date")
 
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
 
 @admin.register(ApprovalEvent)
 class ApprovalAdmin(SuperuserOnly, admin.ModelAdmin):
     list_display = ("plan", "actor", "result", "created_at")
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(Holiday)
+class HolidayAdmin(SuperuserOnly, admin.ModelAdmin):
+    list_display = ("date", "name")
+
+
+@admin.register(WorkRecordEvent)
+class WorkRecordEventAdmin(SuperuserOnly, admin.ModelAdmin):
+    list_display = ("record", "actor", "reason", "created_at")
 
     def has_add_permission(self, request):
         return False
