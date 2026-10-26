@@ -70,8 +70,10 @@ def check_version(obj, version):
 
 
 def event(plan, actor, comment="", before=None):
-    ApprovalEvent.objects.create(plan=plan, actor=actor, result=plan.status,
+    entry = ApprovalEvent.objects.create(plan=plan, actor=actor, result=plan.status,
         comment=comment, version=plan.version, snapshot={"before": before, "after": snapshot(plan)})
+    from .teams import enqueue
+    enqueue(entry, plan, actor)
 
 
 @transaction.atomic

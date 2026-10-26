@@ -1,8 +1,10 @@
 from django.contrib import admin
 from django.urls import path
 from core import auth_views, views
+from core.teams_views import messages as teams_messages
 
 urlpatterns = [
+    path("api/teams/messages/", teams_messages, name="teams_messages"),
     path("admin/", admin.site.urls),
     path("accounts/login/", auth_views.login_page, name="login"),
     path("accounts/entra/login/", auth_views.entra_login, name="entra_login"),

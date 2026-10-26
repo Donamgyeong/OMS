@@ -31,6 +31,6 @@ class EntraSessionMiddleware:
         if not request.user.is_authenticated or request.user.onboarding_completed:
             return None
         # Route names, not URL prefixes: pending users cannot reach business/admin URLs.
-        if request.resolver_match.url_name not in {"onboarding", "logout", "health"}:
+        if request.resolver_match.url_name not in {"onboarding", "logout", "health", "teams_messages"}:
             return redirect("onboarding")
         return None

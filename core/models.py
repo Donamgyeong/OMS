@@ -219,3 +219,44 @@ class Notification(models.Model):
     message = models.CharField(max_length=250)
     created_at = models.DateTimeField(auto_now_add=True)
     read = models.BooleanField(default=False)
+
+
+class TeamsConversation(models.Model):
+    tenant_id = models.UUIDField()
+    object_id = models.UUIDField()
+    bot_id = models.UUIDField()
+    conversation_id = models.CharField(max_length=512)
+    service_url = models.URLField(max_length=512)
+    active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["tenant_id", "object_id", "bot_id"], name="unique_teams_conversation")]
+
+
+class TeamsDelivery(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "발송 대기"
+        PROCESSING = "processing", "처리 중"
+        SENT = "sent", "발송 완료"
+        BLOCKED = "blocked", "설정/설치 확인 필요"
+        FAILED = "failed", "재시도 한도 초과"
+        SKIPPED = "skipped", "유효하지 않은 요청"
+
+    event = models.ForeignKey(ApprovalEvent, on_delete=models.PROTECT)
+    recipient = models.ForeignKey(User, on_delete=models.PROTECT)
+    kind = models.CharField(max_length=20)
+    payload = models.JSONField()
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now)
+    lease_until = models.DateTimeField(null=True, blank=True)
+    lease_token = models.UUIDField(null=True, blank=True)
+    error_code = models.CharField(max_length=64, blank=True)
+    activity_id = models.CharField(max_length=512, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    sent_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["event", "recipient", "kind"], name="unique_teams_delivery")]
+        indexes = [models.Index(fields=["status", "next_attempt_at"])]

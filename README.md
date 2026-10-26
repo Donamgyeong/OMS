@@ -58,6 +58,8 @@ Docker ARM64·PostgreSQL 및 실제 HTTP 검증 결과와 재현 절차: [docs/v
 
 기능 기획: [docs/overtime-approval-plan.md](docs/overtime-approval-plan.md)
 
+Teams 결재 알림 계획·설정·운영: [docs/teams-notification-plan.md](docs/teams-notification-plan.md). Teams-managed bot 개인 알림을 지원하며 기본 비활성이다. 등록 후 `TEAMS_ENABLED=1`과 봇 자격 증명·공개 URL을 설정하고 `teams` profile의 worker를 실행한다.
+
 ## 프로젝트 구조
 
 ```text

@@ -82,6 +82,15 @@ if any((ENTRA_TENANT_ID, ENTRA_CLIENT_ID, ENTRA_CLIENT_SECRET, ENTRA_REDIRECT_UR
     if ENTRA_LOGOUT_MICROSOFT:
         validate_entra_uri(ENTRA_POST_LOGOUT_REDIRECT_URI, "/accounts/login/")
 ENTRA_AUTHORITY = f"https://login.microsoftonline.com/{ENTRA_TENANT_ID}"
+# Disabled until bot registration, personal app installation and endpoint setup.
+TEAMS_ENABLED = os.getenv("TEAMS_ENABLED", "0") == "1"
+TEAMS_TENANT_ID = os.getenv("TEAMS_TENANT_ID", "").strip()
+TEAMS_CLIENT_ID = os.getenv("TEAMS_CLIENT_ID", "").strip()
+TEAMS_CLIENT_SECRET = os.getenv("TEAMS_CLIENT_SECRET", "").strip()
+OMS_PUBLIC_URL = os.getenv("OMS_PUBLIC_URL", "").strip().rstrip("/")
+TEAMS_SERVICE_HOSTS = [host.strip() for host in os.getenv(
+    "TEAMS_SERVICE_HOSTS", "smba.trafficmanager.net,smba.infra.teams.microsoft.com"
+).split(",") if host.strip()]
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
     {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator"},

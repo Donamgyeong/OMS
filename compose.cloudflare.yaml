@@ -1,6 +1,22 @@
 # Standalone deployment: use this file instead of compose.yaml (do not merge).
 # Public hostname and service URL http://app:8000 are configured in Cloudflare.
 services:
+  teams-worker:
+    image: ${APP_IMAGE:-oms:local}
+    platform: linux/arm64
+    profiles: [teams]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+    command: ["python", "manage.py", "send_teams_notifications"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - tunnel
+      - database
+    restart: unless-stopped
+    mem_limit: 256m
   app:
     image: ${APP_IMAGE:-oms:local}
     platform: linux/arm64

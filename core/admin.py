@@ -4,6 +4,8 @@ from django.contrib.auth.views import redirect_to_login
 from django.views.decorators.http import require_GET
 from .authentication import revoke_sessions
 from .models import ApprovalEvent, Department, Holiday, Notification, OvertimePlan, OvertimePolicy, User, WorkRecord, WorkRecordEvent
+from .models import TeamsConversation, TeamsDelivery
+from django.utils import timezone
 
 
 class SuperuserOnly:
@@ -116,6 +118,39 @@ class WorkRecordEventAdmin(SuperuserOnly, admin.ModelAdmin):
 
 admin.site.site_header = "OMS 근무 관리"
 admin.site.site_title = "OMS 관리자"
+
+
+@admin.register(TeamsConversation)
+class TeamsConversationAdmin(SuperuserOnly, admin.ModelAdmin):
+    list_display = ("object_id", "tenant_id", "active", "updated_at")
+    list_filter = ("active",)
+    readonly_fields = tuple(field.name for field in TeamsConversation._meta.fields)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(TeamsDelivery)
+class TeamsDeliveryAdmin(SuperuserOnly, admin.ModelAdmin):
+    list_display = ("id", "recipient", "kind", "status", "attempts", "error_code", "created_at", "sent_at")
+    list_filter = ("status", "kind")
+    readonly_fields = tuple(field.name for field in TeamsDelivery._meta.fields)
+    actions = ("retry_failed",)
+
+    def has_add_permission(self, request):
+        return False
+
+    @admin.action(description="선택한 실패·설치 대기 알림 재시도")
+    def retry_failed(self, request, queryset):
+        for item in queryset.filter(status__in=[TeamsDelivery.Status.BLOCKED, TeamsDelivery.Status.FAILED]):
+            changed = TeamsDelivery.objects.filter(pk=item.pk, status=item.status).update(
+                status=TeamsDelivery.Status.PENDING, attempts=0, next_attempt_at=timezone.now(),
+                error_code="", lease_token=None, lease_until=None)
+            if changed:
+                self.log_change(request, item, "Teams 알림 수동 재시도")
 
 
 @require_GET

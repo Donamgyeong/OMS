@@ -1,4 +1,17 @@
 services:
+  teams-worker:
+    image: ${APP_IMAGE:-oms:local}
+    platform: linux/arm64
+    profiles: [teams]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+    command: ["python", "manage.py", "send_teams_notifications"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
   app:
     image: ${APP_IMAGE:-oms:local}
     platform: linux/arm64
