@@ -85,9 +85,9 @@ python3 scripts/deploy_nas.py --host oms-nas \
 1. SSH, NAS 경로·`.env`, Docker 권한을 사전 확인한다.
 2. 현재 작업 트리로 ARM64 앱 이미지를 빌드한다. 커밋하지 않은 코드도 포함된다.
 3. 이미지를 저장하고 Compose, 원격 스크립트, 원본 이미지 ID·아카이브 config 해시와 SHA-256 체크섬을 묶어 SSH로 전송한다.
-4. NAS 배포 잠금을 잡고 체크섬·이미지 ID·아키텍처·Compose·터널 token 파일 존재·Django 운영 설정을 검사한다.
+4. NAS 배포 잠금을 잡고 체크섬·이미지 ID·아키텍처·Compose·터널 token 파일 존재와 실제 Docker 마운트·Django 운영 설정을 검사한다.
 5. DB health와 마이그레이션 누락을 확인하고, app과 worker를 중지한 뒤 DB·media를 백업한다.
-6. 마이그레이션을 적용하고 app·worker·터널을 교체한다. app·터널 health와 connector readiness를 확인한다.
+6. 마이그레이션을 적용하고 app·worker·터널을 교체한다. 터널은 이전 token bind mount가 남지 않도록 항상 재생성한다. app·터널 health와 connector readiness를 확인한다.
 7. 성공한 이미지 태그를 NAS `.env`에 기록하고 운영 Compose 파일을 교체한다.
 
 로컬 산출물은 `dist/nas/<릴리스>/`, NAS 전송 파일은 `<배포경로>/releases/<릴리스>/`,
@@ -102,6 +102,12 @@ python3 scripts/deploy_nas.py --host oms-nas \
 오래된 이미지·전송 파일·백업은 자동 삭제하지 않는다.
 
 ## 실패 시
+
+`bind source path does not exist`가 이전 배포 폴더의 `secrets/cloudflared-token`을 가리키면 NAS `.env`의
+`CLOUDFLARE_TUNNEL_TOKEN_FILE`과 실제 파일 위치를 확인한다. 기본 권장값은
+`CLOUDFLARE_TUNNEL_TOKEN_FILE=/volume1/oms/secrets/cloudflared-token`이며 해당 파일이 실제로 있어야 한다.
+token은 릴리스별 폴더 밖에 유지한다. 스크립트는 파일 내용을 출력하지 않고 Docker daemon에서 UID 65532로
+읽을 수 있는지 먼저 검사한 뒤, 현재 경로를 적용해 cloudflared를 강제 재생성한다.
 
 원격 배포도 `CHECK: image-identity`, `CHECK: django-deployment-check`처럼 세부 단계를 출력한다.
 Mac Docker와 NAS Docker의 저장 방식에 따라 이미지 ID가 manifest/index 해시 또는 config 해시로 표시될 수 있으므로

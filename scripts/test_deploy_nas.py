@@ -20,7 +20,9 @@ with open(os.environ['DEPLOY_TEST_LOG'], 'a') as f: f.write(json.dumps(a)+'\n')
 if a[0] == 'image':
     print('linux/arm64' if 'Architecture' in a[-1] else os.environ.get('DEPLOY_TEST_IMAGE_ID', 'sha256:fixture'))
 elif a[0] == 'run':
-    if 'python' in a:
+    if '--mount' in a:
+        if os.environ.get('DEPLOY_TEST_FAIL') == 'token-mount': sys.exit(15)
+    elif 'python' in a:
         print(json.load(sys.stdin)['secrets']['cloudflared_token']['file'])
     else: print('media-backup')
 elif a[0] == 'compose':
@@ -152,6 +154,23 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.token.unlink()
         self.assertNotEqual(self.deploy().returncode, 0)
         self.assertFalse(any('stop' in a for a in self.calls()))
+
+    def test_token_mount_is_verified_before_maintenance(self):
+        result = self.deploy('token-mount')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('tunnel-secret-mount', result.stderr)
+        self.assertFalse(any('stop' in a for a in self.calls()))
+        self.assertFalse(any('migrate' in a for a in self.calls()))
+
+    def test_connector_is_recreated_with_current_secret_path(self):
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        mount = next(a for a in calls if '--mount' in a)
+        self.assertIn('type=bind,src=' + str(self.token) + ',dst=/tmp/oms-cloudflared-token,readonly', mount)
+        up = next(a for a in calls if 'up' in a and 'cloudflared' in a)
+        self.assertIn('--force-recreate', up)
+        self.assertIn('--no-deps', up)
 
     def test_failed_backup_does_not_run_migrations(self):
         self.assertNotEqual(self.deploy('backup').returncode, 0)

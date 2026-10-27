@@ -88,7 +88,16 @@ step tunnel-secret-path
 token=$(c config --format json | d run --rm -i --network none --entrypoint python "$APP_IMAGE" \
     -c 'import json,sys; print(json.load(sys.stdin)["secrets"]["cloudflared_token"]["file"])')
 step tunnel-secret-file
-test -s "$token" || { echo 'Cloudflare token file is missing or empty.' >&2; exit 1; }
+test -s "$token" || { echo "Cloudflare token file is missing or empty: $token" >&2; exit 1; }
+# Pin the resolved path, including when an old connector has a stale bind mount.
+CLOUDFLARE_TUNNEL_TOKEN_FILE=$token
+export CLOUDFLARE_TUNNEL_TOKEN_FILE
+step tunnel-secret-mount
+# Check the daemon's filesystem and non-root readability before stopping writers.
+d run --rm --network none --user 65532:65532 \
+    --mount "type=bind,src=$token,dst=/tmp/oms-cloudflared-token,readonly" \
+    --entrypoint python "$APP_IMAGE" \
+    -c 'from pathlib import Path; assert Path("/tmp/oms-cloudflared-token").read_bytes().strip(), "Empty tunnel token"'
 # Check configuration and credentials format before interrupting the current app.
 step django-deployment-check
 c run --rm --no-deps app python manage.py check --deploy --fail-level ERROR
@@ -123,10 +132,11 @@ fi
 step migration
 migration_started=1
 c run --rm --no-deps app python manage.py migrate --noinput
-step startup
+step app-startup
 c up -d --wait --wait-timeout 180 app
 if [ "$teams" = 1 ]; then c up -d teams-worker; fi
-c up -d --wait --wait-timeout 180 cloudflared
+step tunnel-startup
+c up -d --force-recreate --no-deps --wait --wait-timeout 180 cloudflared
 c exec -T cloudflared cloudflared tunnel --metrics 127.0.0.1:2000 ready
 step save-configuration
 # Keep the NAS secrets and only replace the release image tag. Publish after health checks.
