@@ -54,6 +54,8 @@ Cloudflare Tunnel 환경 구성·도메인·DNS·토큰·SSO 설정: [docs/deplo
 
 NAS 이미지 준비·백업·DSM 프록시 대안: [docs/deployment-synology.md](docs/deployment-synology.md)
 
+SSH 자동 배포: `python3 scripts/deploy_nas.py --host <SSH별칭 또는 사용자@NAS>`. ARM64 앱 빌드·전송·백업·마이그레이션·서비스 교체를 수행한다. NAS의 기존 `.env`와 터널 토큰을 사용한다. 옵션과 최초 설정은 [SSH 배포 문서](docs/deployment-ssh.md)를 참고한다. 배포 산출물은 Git에서 제외한 `dist/nas/`에 저장한다.
+
 Docker ARM64·PostgreSQL 및 실제 HTTP 검증 결과와 재현 절차: [docs/verification.md](docs/verification.md)
 
 기능 기획: [docs/overtime-approval-plan.md](docs/overtime-approval-plan.md)
@@ -76,4 +78,4 @@ compose.cloudflare.yaml  포트 공개 없는 앱·DB·Cloudflare Tunnel 배포
 .env.cloudflare.example  Cloudflare 배포 환경변수 예시
 ```
 
-의존성은 지원 버전 범위로 지정했다. 실제 배포 전 검증한 정확한 버전으로 잠금 파일을 만들고, 앱 이미지는 고유 릴리스 태그로 관리한다. ARM64 이미지·PostgreSQL은 Docker 에뮬레이션에서 검증했으며 NAS 실기기와 HTTPS 환경은 배포 시 확인한다.
+의존성 지원 범위는 `requirements.txt`, 검증한 직접·간접 의존성의 고정 버전은 `requirements.lock`으로 관리한다. Docker 빌드는 두 파일을 함께 적용한다. 의존성을 변경하면 두 파일을 갱신하고 전체 테스트를 실행한다. 앱 이미지는 고유 릴리스 태그로 관리한다. [2026-10-26 배포 준비 기록](docs/release-2026-10-26.md)을 참고한다. NAS 실기기와 실제 HTTPS·SSO는 배포 시 확인한다.

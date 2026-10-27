@@ -57,7 +57,7 @@
 
 ## 4. NAS 파일과 환경변수
 
-NAS의 배포 폴더(예: `/volume1/docker/oms`)에 다음을 준비한다.
+NAS의 배포 폴더(예: `/volume1/oms/`)에 다음을 준비한다.
 
 ```text
 compose.cloudflare.yaml

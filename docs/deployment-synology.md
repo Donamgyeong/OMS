@@ -22,7 +22,7 @@ docker save -o oms-0.1.0-arm64.tar oms:0.1.0
 
 ## 2. 설정
 
-NAS의 전용 프로젝트 폴더(예: `/volume1/docker/oms`)에 `compose.yaml`과 `.env.example`을 복사하고 `.env`를 만든다.
+NAS의 전용 프로젝트 폴더(예: `/volume1/oms/`)에 `compose.yaml`과 `.env.example`을 복사하고 `.env`를 만든다.
 
 - `APP_IMAGE=oms:0.1.0`으로 지정한다.
 - SECRET_KEY와 DB 비밀번호를 각각 충분히 긴 무작위 값으로 변경한다. 예시는 실제 비밀값이 아니다.

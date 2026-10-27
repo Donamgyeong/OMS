@@ -10,3 +10,5 @@ staticfiles/
 media/
 backups/
 .coverage
+# Local deployment bundles (images, transfer archives, checksums).
+/dist/
