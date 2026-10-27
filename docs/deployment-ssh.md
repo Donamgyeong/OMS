@@ -84,7 +84,7 @@ python3 scripts/deploy_nas.py --host oms-nas \
 
 1. SSH, NAS 경로·`.env`, Docker 권한을 사전 확인한다.
 2. 현재 작업 트리로 ARM64 앱 이미지를 빌드한다. 커밋하지 않은 코드도 포함된다.
-3. 이미지를 저장하고 Compose, 원격 스크립트, 이미지 ID와 SHA-256 체크섬을 묶어 SSH로 전송한다.
+3. 이미지를 저장하고 Compose, 원격 스크립트, 원본 이미지 ID·아카이브 config 해시와 SHA-256 체크섬을 묶어 SSH로 전송한다.
 4. NAS 배포 잠금을 잡고 체크섬·이미지 ID·아키텍처·Compose·터널 token 파일 존재·Django 운영 설정을 검사한다.
 5. DB health와 마이그레이션 누락을 확인하고, app과 worker를 중지한 뒤 DB·media를 백업한다.
 6. 마이그레이션을 적용하고 app·worker·터널을 교체한다. app·터널 health와 connector readiness를 확인한다.
@@ -102,6 +102,11 @@ python3 scripts/deploy_nas.py --host oms-nas \
 오래된 이미지·전송 파일·백업은 자동 삭제하지 않는다.
 
 ## 실패 시
+
+원격 배포도 `CHECK: image-identity`, `CHECK: django-deployment-check`처럼 세부 단계를 출력한다.
+Mac Docker와 NAS Docker의 저장 방식에 따라 이미지 ID가 manifest/index 해시 또는 config 해시로 표시될 수 있으므로
+아카이브에서 계산한 config 해시와 원본 ID를 모두 검증에 사용한다. 어느 값과도 일치하지 않으면 실제·기대 ID를 출력하고 중단한다.
+마이그레이션 시작 전 실패는 `Migrations were not started.`로 표시하며, 백업은 완성된 DB dump가 있을 때만 있다고 안내한다.
 
 사전 검사 실패는 기존 app과 worker를 중지하기 전에 종료한다. 백업·마이그레이션·기동 단계에서 실패하면
 단계와 백업 경로를 출력하며, DB를 자동으로 되돌리거나 이전 앱을 자동 재시작하지 않는다.

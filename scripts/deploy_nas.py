@@ -4,6 +4,7 @@ import argparse
 from contextlib import suppress
 from datetime import datetime, timezone
 import hashlib
+import json
 from pathlib import Path
 import posixpath
 import re
@@ -23,6 +24,18 @@ def run(command, **kwargs):
         display[-1] = '[remote command]'
     print('+ ' + shlex.join(str(part) for part in display), flush=True)
     return subprocess.run(command, check=True, **kwargs)
+
+
+def archive_config_id(path, image):
+    """Classic Docker uses the config digest as image ID; containerd may use an index ID."""
+    with tarfile.open(path) as archive:
+        entries = json.loads(archive.extractfile('manifest.json').read())
+        entry = next(item for item in entries if image in (item.get('RepoTags') or []))
+        config = archive.extractfile(entry['Config']).read()
+        platform = json.loads(config)
+        if (platform.get('os'), platform.get('architecture')) != ('linux', 'arm64'):
+            raise RuntimeError('Saved image config is not linux/arm64')
+        return 'sha256:' + hashlib.sha256(config).hexdigest()
 
 
 def preflight_script(args):
@@ -134,9 +147,11 @@ def deploy(args, control_path):
     stage = ROOT / 'dist' / 'nas' / release
     stage.mkdir(parents=True)
     run(['docker', 'save', '-o', str(stage / 'app-image.tar'), image])
+    config_id = archive_config_id(stage / 'app-image.tar', image)
     for source in [ROOT / 'compose.cloudflare.yaml', ROOT / 'scripts' / 'deploy_nas_remote.sh']:
         (stage / source.name).write_bytes(source.read_bytes())
     (stage / 'image-id').write_text(image_id + '\n')
+    (stage / 'image-config-id').write_text(config_id + '\n')
     checksums = []
     for path in sorted(stage.iterdir()):
         digest = hashlib.sha256()

@@ -6,10 +6,11 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import tarfile
 import tempfile
 import unittest
 
-from deploy_nas import deploy, main, parse_args, preflight_script
+from deploy_nas import archive_config_id, deploy, main, parse_args, preflight_script
 
 REMOTE = Path(__file__).with_name('deploy_nas_remote.sh')
 FAKE_DOCKER = r'''#!/usr/bin/env python3
@@ -17,7 +18,7 @@ import json, os, sys
 a = sys.argv[1:]
 with open(os.environ['DEPLOY_TEST_LOG'], 'a') as f: f.write(json.dumps(a)+'\n')
 if a[0] == 'image':
-    print('linux/arm64' if 'Architecture' in a[-1] else 'sha256:fixture')
+    print('linux/arm64' if 'Architecture' in a[-1] else os.environ.get('DEPLOY_TEST_IMAGE_ID', 'sha256:fixture'))
 elif a[0] == 'run':
     if 'python' in a:
         print(json.load(sys.stdin)['secrets']['cloudflared_token']['file'])
@@ -66,6 +67,7 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.token = self.target / 'token'
         self.token.write_text('fake-token\n')
         for name, content in [('app-image.tar', b'fixture'), ('image-id', b'sha256:fixture\n'),
+                              ('image-config-id', b'sha256:classic-fixture\n'),
                               ('compose.cloudflare.yaml', b'new-compose\n')]:
             (self.release / name).write_bytes(content)
         (self.release / 'SHA256SUMS').write_text(''.join(
@@ -75,11 +77,11 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
                         DEPLOY_TEST_LOG=str(self.log), DEPLOY_TEST_TOKEN=str(self.token))
 
-    def deploy(self, failure='', docker_mode='docker', trailing_slash=False):
+    def deploy(self, failure='', docker_mode='docker', trailing_slash=False, image_id='sha256:fixture'):
         target = str(self.target) + ('/' if trailing_slash else '')
         return subprocess.run(['sh', str(REMOTE), target, str(self.release),
                                'oms', 'oms:new', docker_mode, '0'],
-                              env=dict(self.env, DEPLOY_TEST_FAIL=failure),
+                              env=dict(self.env, DEPLOY_TEST_FAIL=failure, DEPLOY_TEST_IMAGE_ID=image_id),
                               text=True, capture_output=True)
 
     def calls(self):
@@ -108,6 +110,20 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertFalse(any('stop' in a for a in self.calls()))
         self.assertEqual((self.target / '.env').read_text(), self.old_env)
         self.assertFalse((self.target / '.deploy-lock').exists())
+        self.assertIn('django-deployment-check', result.stderr)
+        self.assertIn('Migrations were not started.', result.stderr)
+        self.assertNotIn('rollback', result.stderr)
+
+    def test_classic_docker_config_id_is_accepted(self):
+        result = self.deploy(image_id='sha256:classic-fixture')
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unknown_image_id_is_rejected_with_actual_and_expected_values(self):
+        result = self.deploy(image_id='sha256:unexpected')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Image ID mismatch: actual=sha256:unexpected', result.stderr)
+        self.assertIn('image-identity', result.stderr)
+        self.assertFalse(any('stop' in a for a in self.calls()))
 
     def test_trailing_slash_does_not_duplicate_backup_path_separators(self):
         result = self.deploy(trailing_slash=True)
@@ -162,6 +178,23 @@ class RemoteDeploymentTests(unittest.TestCase):
 
 
 class LocalDeploymentTests(unittest.TestCase):
+    @staticmethod
+    def image_archive(path):
+        config = json.dumps({'os': 'linux', 'architecture': 'arm64'}).encode()
+        manifest = json.dumps([{'RepoTags': ['oms:test'], 'Config': 'config.json'}]).encode()
+        with tarfile.open(path, 'w') as archive:
+            for name, data in [('manifest.json', manifest), ('config.json', config)]:
+                info = tarfile.TarInfo(name)
+                info.size = len(data)
+                archive.addfile(info, io.BytesIO(data))
+        return 'sha256:' + hashlib.sha256(config).hexdigest()
+
+    def test_archive_id_uses_config_digest_instead_of_host_index_id(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / 'image.tar'
+            expected = self.image_archive(path)
+            self.assertEqual(archive_config_id(path, 'oms:test'), expected)
+
     def test_nas_path_normalization(self):
         for path in ['/volume1/oms/', '/volume1//oms///', '//volume1/./oms/']:
             with self.subTest(path=path):
@@ -209,7 +242,7 @@ class LocalDeploymentTests(unittest.TestCase):
             args = parse_args(['--host', 'nas', '--password', '--skip-build', '--image', 'oms:test'])
             def fake_run(command, **kwargs):
                 if command[:2] == ['docker', 'save']:
-                    Path(command[3]).write_bytes(b'archive')
+                    self.image_archive(Path(command[3]))
             with patch('deploy_nas.ROOT', root), patch('deploy_nas.run', side_effect=fake_run) as run:
                 with patch('deploy_nas.subprocess.check_output', side_effect=['linux/arm64\n', 'sha256:fixture\n']):
                     with contextlib.redirect_stdout(io.StringIO()):

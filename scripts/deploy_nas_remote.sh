@@ -22,14 +22,28 @@ mkdir "$target/.deploy-lock" 2>/dev/null || {
     exit 1
 }
 phase=preflight
+migration_started=0
 backup="$target/backups/$(basename "$release")"
+step() {
+    phase=$1
+    printf 'CHECK: %s\n' "$phase" >&2
+}
 finish() {
     result=$?
     trap - EXIT
     rmdir "$target/.deploy-lock"
     if [ "$result" -ne 0 ]; then
-        echo "Deployment failed during: $phase. Backup location: $backup" >&2
-        echo 'No database rollback was attempted. Check migration state before restarting writers.' >&2
+        echo "ERROR: Deployment failed during: $phase (exit $result)." >&2
+        if [ -s "$backup/database.dump" ]; then
+            echo "Database backup available: $backup" >&2
+        else
+            echo 'No completed database backup was created in this run.' >&2
+        fi
+        if [ "$migration_started" = 0 ]; then
+            echo 'Migrations were not started.' >&2
+        else
+            echo 'No database rollback was attempted. Check migration state before restarting writers.' >&2
+        fi
     fi
     exit "$result"
 }
@@ -49,31 +63,53 @@ c() {
         -p "$project" -f "$release/compose.cloudflare.yaml" --profile teams "$@"
 }
 cd "$release"
+step archive-checksum
 sha256sum -c SHA256SUMS
+step image-load
 d load -i app-image.tar
-test "$(d image inspect "$APP_IMAGE" --format '{{.Id}}')" = "$(cat image-id)"
-test "$(d image inspect "$APP_IMAGE" --format '{{.Os}}/{{.Architecture}}')" = linux/arm64
+step image-identity
+actual_id=$(d image inspect "$APP_IMAGE" --format '{{.Id}}')
+source_id=$(cat image-id)
+config_id=$(cat image-config-id)
+if [ "$actual_id" != "$source_id" ] && [ "$actual_id" != "$config_id" ]; then
+    printf 'Image ID mismatch: actual=%s source=%s config=%s\n' "$actual_id" "$source_id" "$config_id" >&2
+    exit 1
+fi
+step image-platform
+actual_platform=$(d image inspect "$APP_IMAGE" --format '{{.Os}}/{{.Architecture}}')
+test "$actual_platform" = linux/arm64 || {
+    echo "Expected linux/arm64, got $actual_platform" >&2; exit 1;
+}
 cd "$target"
+step compose-config
 c config --quiet
 # Resolve Compose's secret path without sourcing .env as shell code or printing values.
+step tunnel-secret-path
 token=$(c config --format json | d run --rm -i --network none --entrypoint python "$APP_IMAGE" \
     -c 'import json,sys; print(json.load(sys.stdin)["secrets"]["cloudflared_token"]["file"])')
+step tunnel-secret-file
 test -s "$token" || { echo 'Cloudflare token file is missing or empty.' >&2; exit 1; }
 # Check configuration and credentials format before interrupting the current app.
+step django-deployment-check
 c run --rm --no-deps app python manage.py check --deploy --fail-level ERROR
 # Preserve an already running worker on routine updates.
+step existing-containers
 worker=$(c ps --status running -q teams-worker)
 app=$(c ps -a -q app)
 if [ -n "$worker" ]; then teams=1; fi
 if [ "$teams" = 1 ]; then
+    step teams-settings
     c run --rm --no-deps app python -c 'import os; os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings"); from django.conf import settings; assert settings.TEAMS_ENABLED, "Set TEAMS_ENABLED=1 on NAS before --teams"'
 fi
+step database-health
 c up -d --wait --wait-timeout 180 db
+step migration-drift
 c run --rm --no-deps app python manage.py makemigrations --check --dry-run
+step backup-directory
 mkdir -p "$backup"
 cp .env "$backup/env.before"
 if [ -f compose.cloudflare.yaml ]; then cp compose.cloudflare.yaml "$backup/compose.before.yaml"; fi
-phase=backup
+step backup
 c stop app teams-worker
 c exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$backup/database.dump.tmp"
 test -s "$backup/database.dump.tmp"
@@ -84,14 +120,15 @@ if [ -n "$app" ]; then
     test -s "$backup/media.tar.gz.tmp"
     mv "$backup/media.tar.gz.tmp" "$backup/media.tar.gz"
 fi
-phase=migration
+step migration
+migration_started=1
 c run --rm --no-deps app python manage.py migrate --noinput
-phase=startup
+step startup
 c up -d --wait --wait-timeout 180 app
 if [ "$teams" = 1 ]; then c up -d teams-worker; fi
 c up -d --wait --wait-timeout 180 cloudflared
 c exec -T cloudflared cloudflared tunnel --metrics 127.0.0.1:2000 ready
-phase=save-configuration
+step save-configuration
 # Keep the NAS secrets and only replace the release image tag. Publish after health checks.
 awk -v image="$APP_IMAGE" '
     BEGIN { found=0 }
