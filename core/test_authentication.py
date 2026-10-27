@@ -378,6 +378,37 @@ class EntraAccessTests(TestCase):
         self.assertEqual(client.get("/accounts/logout/").status_code, 405)
         self.assertEqual(client.post("/accounts/logout/").status_code, 403)
 
+    def test_https_admin_user_save_preserves_csrf_protection(self):
+        administrator = User.objects.create_superuser(
+            "csrf-admin", role="admin", onboarding_completed=True,
+        )
+        client = SSOClient(enforce_csrf_checks=True)
+        client.force_login(administrator)
+        path = f"/admin/core/user/{self.user.pk}/change/"
+        response = client.get(path, secure=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["Referrer-Policy"], "same-origin")
+        data = dict(
+            first_name="수정된 이름", last_name="", email="member@example.com",
+            is_active="on", employee_number="", department="", role="employee",
+            designated_approver="", daily_work_minutes=480,
+            working_weekdays="0,1,2,3,4", _save="저장",
+            csrfmiddlewaretoken=client.cookies["csrftoken"].value,
+        )
+        # Browsers without an Origin header rely on the same-site Referer.
+        response = client.post(path, data, secure=True,
+            HTTP_REFERER=f"https://testserver{path}")
+        self.assertEqual(response.status_code, 302)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.first_name, "수정된 이름")
+        for headers in ({}, {"HTTP_REFERER": "https://evil.example/"},
+                {"HTTP_ORIGIN": "https://evil.example"}):
+            with self.subTest(headers=headers):
+                self.assertEqual(client.post(path, data, secure=True, **headers).status_code, 403)
+        data.pop("csrfmiddlewaretoken")
+        self.assertEqual(client.post(path, data, secure=True,
+            HTTP_REFERER=f"https://testserver{path}").status_code, 403)
+
     @override_settings(ENTRA_LOGOUT_MICROSOFT=True, ENTRA_POST_LOGOUT_REDIRECT_URI="https://oms.example.com/accounts/login/")
     def test_microsoft_logout_clears_local_session_first(self):
         self.client.force_login(self.user)

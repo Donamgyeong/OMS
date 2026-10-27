@@ -42,6 +42,13 @@ class User(AbstractUser):
     onboarding_completed = models.BooleanField("업무 설정 완료", default=False)
     auth_version = models.PositiveIntegerField(default=0, editable=False)
 
+    @property
+    def display_name(self):
+        return self.get_full_name() or self.email or self.username
+
+    def __str__(self):
+        return self.display_name
+
     def clean(self):
         super().clean()
         if self.designated_approver_id and self.designated_approver_id == self.pk:

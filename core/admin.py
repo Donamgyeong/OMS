@@ -29,12 +29,18 @@ class SuperuserOnly:
 @admin.register(User)
 class OMSUserAdmin(SuperuserOnly, UserAdmin):
     fieldsets = (
-        ("회사 계정", {"fields": ("username", "first_name", "last_name", "email", "entra_reference")}),
+        ("회사 계정", {"fields": ("display_name", "first_name", "last_name", "email", "entra_reference")}),
         ("접근 권한", {"fields": ("is_active", "is_staff", "is_superuser", "onboarding_completed")}),
         ("조직·근무 기준", {"fields": ("employee_number", "department", "role", "designated_approver", "daily_work_minutes", "working_weekdays")}),
     )
-    readonly_fields = ("username", "entra_reference")
-    list_display = ("username", "employee_number", "department", "role", "is_active", "onboarding_completed")
+    readonly_fields = ("display_name", "entra_reference")
+    list_display = ("display_name", "email", "employee_number", "department", "role", "is_active", "onboarding_completed")
+    search_fields = ("first_name", "last_name", "email", "employee_number")
+    ordering = ("first_name", "last_name", "email", "pk")
+
+    @admin.display(description="이름", ordering="first_name")
+    def display_name(self, obj):
+        return obj.display_name
 
     @admin.display(description="Entra ID (tenant / object)")
     def entra_reference(self, obj):

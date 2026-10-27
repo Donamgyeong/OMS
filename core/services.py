@@ -103,7 +103,7 @@ def save_plan(actor, data, *, pk=None, version=None, submit=False):
     plan.save()
     event(plan, actor, "제출" if submit else "임시 저장", before)
     if plan.status == OvertimePlan.Status.PENDING:
-        Notification.objects.create(user=plan.approver, plan=plan, message=f"{actor.username}: {plan.title} 결재 요청")
+        Notification.objects.create(user=plan.approver, plan=plan, message=f"{actor.display_name}: {plan.title} 결재 요청")
     return plan
 
 
