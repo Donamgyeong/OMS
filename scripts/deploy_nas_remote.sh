@@ -10,6 +10,8 @@ APP_IMAGE=$4
 docker_mode=$5
 teams=$6
 export APP_IMAGE
+# The SSH caller allocates a TTY. Prompt once here, then preserve Docker stdin/stdout.
+if [ "$docker_mode" = sudo ]; then sudo -v; fi
 cd "$target"
 test -f .env
 mkdir "$target/.deploy-lock" 2>/dev/null || {
@@ -32,7 +34,12 @@ trap finish EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 d() {
-    if [ "$docker_mode" = sudo ]; then sudo -n docker "$@"; else docker "$@"; fi
+    if [ "$docker_mode" = sudo ]; then
+        # Refresh/re-prompt after long builds or migrations; never consume piped Docker input.
+        sudo -v && sudo -n docker "$@"
+    else
+        docker "$@"
+    fi
 }
 c() {
     d compose --project-directory "$target" --env-file "$target/.env" \

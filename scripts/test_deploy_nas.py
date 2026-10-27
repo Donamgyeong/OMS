@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import unittest
 
-from deploy_nas import main, parse_args
+from deploy_nas import deploy, main, parse_args
 
 REMOTE = Path(__file__).with_name('deploy_nas_remote.sh')
 FAKE_DOCKER = r'''#!/usr/bin/env python3
@@ -37,6 +37,13 @@ elif a[0] == 'compose':
         sys.exit(14)
     elif action == 'ps' and 'app' in a: print('old-app-id')
 '''
+FAKE_SUDO = r'''#!/usr/bin/env python3
+import json, os, sys
+with open(os.environ['DEPLOY_TEST_LOG'], 'a') as f: f.write(json.dumps(['sudo']+sys.argv[1:])+'\n')
+if sys.argv[1:] == ['-v']: sys.exit(0)
+assert sys.argv[1:3] == ['-n','docker']
+os.execvp('docker', ['docker']+sys.argv[3:])
+'''
 
 
 class RemoteDeploymentTests(unittest.TestCase):
@@ -51,6 +58,8 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.bin.mkdir()
         (self.bin / 'docker').write_text(FAKE_DOCKER)
         (self.bin / 'docker').chmod(0o755)
+        (self.bin / 'sudo').write_text(FAKE_SUDO)
+        (self.bin / 'sudo').chmod(0o755)
         self.old_env = 'POSTGRES_PASSWORD=retain-this-value\nAPP_IMAGE=oms:old\n'
         (self.target / '.env').write_text(self.old_env)
         (self.target / 'compose.cloudflare.yaml').write_text('old-compose\n')
@@ -66,9 +75,9 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
                         DEPLOY_TEST_LOG=str(self.log), DEPLOY_TEST_TOKEN=str(self.token))
 
-    def deploy(self, failure=''):
+    def deploy(self, failure='', docker_mode='docker'):
         return subprocess.run(['sh', str(REMOTE), str(self.target), str(self.release),
-                               'oms', 'oms:new', 'docker', '0'],
+                               'oms', 'oms:new', docker_mode, '0'],
                               env=dict(self.env, DEPLOY_TEST_FAIL=failure),
                               text=True, capture_output=True)
 
@@ -98,6 +107,15 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertFalse(any('stop' in a for a in self.calls()))
         self.assertEqual((self.target / '.env').read_text(), self.old_env)
         self.assertFalse((self.target / '.deploy-lock').exists())
+
+    def test_sudo_authentication_preserves_piped_input_and_backups(self):
+        result = self.deploy(docker_mode='sudo')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        calls = self.calls()
+        self.assertEqual(calls[0], ['sudo', '-v'])
+        self.assertTrue(any(a[:3] == ['sudo', '-n', 'docker'] for a in calls))
+        self.assertTrue((self.target / 'backups/test-release/database.dump').is_file())
+        self.assertTrue((self.target / 'backups/test-release/media.tar.gz').is_file())
 
     def test_migration_failure_keeps_backup_and_does_not_start_new_app(self):
         result = self.deploy('migration')
@@ -137,6 +155,41 @@ class RemoteDeploymentTests(unittest.TestCase):
 
 
 class LocalDeploymentTests(unittest.TestCase):
+    def test_password_mode_uses_tty_for_sudo_and_no_tty_for_binary_transfer(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / 'scripts').mkdir()
+            (root / 'compose.cloudflare.yaml').write_text('fixture')
+            (root / 'scripts/deploy_nas_remote.sh').write_text('fixture')
+            args = parse_args(['--host', 'nas', '--password', '--skip-build', '--image', 'oms:test'])
+            def fake_run(command, **kwargs):
+                if command[:2] == ['docker', 'save']:
+                    Path(command[3]).write_bytes(b'archive')
+            with patch('deploy_nas.ROOT', root), patch('deploy_nas.run', side_effect=fake_run) as run:
+                with patch('deploy_nas.subprocess.check_output', side_effect=['linux/arm64\n', 'sha256:fixture\n']):
+                    with contextlib.redirect_stdout(io.StringIO()):
+                        self.assertEqual(deploy(args, root / 'socket'), 0)
+            ssh_calls = [call.args[0] for call in run.call_args_list if call.args[0][0] == 'ssh']
+            self.assertEqual(len(ssh_calls), 3)
+            for command in ssh_calls:
+                self.assertIn('BatchMode=no', command)
+                self.assertIn('PubkeyAuthentication=no', command)
+                self.assertIn('ControlPath=' + str(root / 'socket'), command)
+            self.assertIn('-tt', ssh_calls[0])
+            self.assertIn('sudo -v', ssh_calls[0][-1])
+            self.assertIn('-T', ssh_calls[1])
+            self.assertIn('-tt', ssh_calls[2])
+
+    def test_connection_is_closed_when_deployment_fails(self):
+        from unittest.mock import patch
+        with patch('deploy_nas.deploy', side_effect=RuntimeError('failed')):
+            with patch('deploy_nas.subprocess.run') as run:
+                with self.assertRaises(RuntimeError):
+                    main(['--host', 'nas', '--password'])
+            command = run.call_args.args[0]
+            self.assertEqual(command[-3:], ['-O', 'exit', 'nas'])
+
     def test_dry_run_has_no_subprocess_or_artifact_changes(self):
         from unittest.mock import patch
         with patch('deploy_nas.subprocess.run') as run, patch('deploy_nas.subprocess.check_output') as output:

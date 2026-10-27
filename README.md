@@ -54,7 +54,7 @@ Cloudflare Tunnel 환경 구성·도메인·DNS·토큰·SSO 설정: [docs/deplo
 
 NAS 이미지 준비·백업·DSM 프록시 대안: [docs/deployment-synology.md](docs/deployment-synology.md)
 
-SSH 자동 배포: `python3 scripts/deploy_nas.py --host <SSH별칭 또는 사용자@NAS>`. ARM64 앱 빌드·전송·백업·마이그레이션·서비스 교체를 수행한다. NAS의 기존 `.env`와 터널 토큰을 사용한다. 옵션과 최초 설정은 [SSH 배포 문서](docs/deployment-ssh.md)를 참고한다. 배포 산출물은 Git에서 제외한 `dist/nas/`에 저장한다.
+SSH 자동 배포: `python3 scripts/deploy_nas.py --host <SSH별칭 또는 사용자@NAS> --password`. SSH·sudo 비밀번호를 터미널에서 입력하고, NAS Docker는 기본적으로 sudo로 실행한다. ARM64 앱 빌드·전송·백업·마이그레이션·서비스 교체를 수행한다. NAS의 기존 `.env`와 터널 토큰을 사용한다. 옵션과 최초 설정은 [SSH 배포 문서](docs/deployment-ssh.md)를 참고한다. 배포 산출물은 Git에서 제외한 `dist/nas/`에 저장한다.
 
 Docker ARM64·PostgreSQL 및 실제 HTTP 검증 결과와 재현 절차: [docs/verification.md](docs/verification.md)
 

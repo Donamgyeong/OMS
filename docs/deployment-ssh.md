@@ -4,17 +4,21 @@
 기존 배포의 경로와 프로젝트 이름을 그대로 사용해야 같은 DB·media 볼륨을 연결한다.
 
 ```sh
-python3 scripts/deploy_nas.py --host admin@nas-address
+python3 scripts/deploy_nas.py --host admin@nas-address --password
 ```
 
 ## 최초 준비
 
 - 개발 PC: Python 3.9 이상, Docker Buildx, SSH 클라이언트와 실행 중인 Docker 엔진.
 - NAS: SSH, Docker Compose v2 (`--wait`, `--wait-timeout` 지원), `tar`, `sha256sum`.
-- SSH 키 인증과 호스트 키 확인을 먼저 완료한다. SSH config 별칭도 사용할 수 있다.
-  스크립트는 `BatchMode=yes`를 사용하며 비밀번호 입력과 호스트 키 검증 생략을 지원하지 않는다.
-- 기본 원격 Docker 명령은 `sudo -n docker`다. NAS 계정이 이 명령을 비밀번호 입력 없이 실행할 수 있어야 한다.
-  이미 Docker 직접 실행 권한이 있는 계정이라면 `--no-sudo`를 지정한다.
+- SSH 비밀번호 인증을 사용하려면 `--password`를 지정한다. 실행 중 터미널에서 비밀번호를 입력한다.
+  SSH config 별칭도 사용할 수 있으며, 처음 연결하는 NAS는 호스트 키를 확인한다.
+  `--password`를 생략하면 SSH 기본 인증 설정(키 인증 및 비밀번호 입력)을 사용한다.
+- 원격 Docker는 기본적으로 `sudo`로 실행한다. NAS 사용자가 `sudo docker` 실행 권한이 있으면 된다.
+  사전 검사와 실제 배포 단계에서 sudo 비밀번호를 요청할 수 있다. SSH와 같은 비밀번호라면 같은 값을 입력한다.
+  비밀번호 없는 sudo 설정은 필요 없다. 이미 Docker 직접 실행 권한이 있는 계정만 `--no-sudo`를 지정한다.
+- SSH·sudo 비밀번호는 터미널에서 직접 입력하며 스크립트의 인자·환경변수·파일에 저장하지 않는다.
+  `sshpass`나 `expect` 설치도 필요 없다. 인증된 SSH 연결은 비공개 제어 소켓으로 재사용하고 종료 시 닫는다.
 - NAS 배포 폴더는 SSH 계정이 쓸 수 있어야 하며, 운영용 `.env`와 Cloudflare 터널 token 파일을 미리 준비한다.
   `.env`의 도메인·CSRF origin·Entra callback을 일치시킨다. 환경변수의 `APP_IMAGE`는 배포 성공 후 자동 갱신한다.
 - `.env`는 600, token 디렉터리는 700, token 파일은 비루트 cloudflared가 읽을 수 있도록 444를 사용한다.
@@ -29,7 +33,6 @@ Host oms-nas
     HostName 192.168.0.20
     User deploy
     Port 22
-    IdentityFile ~/.ssh/id_ed25519
 ```
 
 ## 실행 옵션
@@ -40,19 +43,23 @@ Host oms-nas
 python3 scripts/deploy_nas.py --host oms-nas --dry-run
 ```
 
-경로, SSH 포트, 키 파일을 직접 지정:
+경로와 SSH 포트를 직접 지정하고 비밀번호로 인증:
 
 ```sh
 python3 scripts/deploy_nas.py --host deploy@192.168.0.20 \
   --path /volume1/oms/ --project oms \
-  --port 2222 --identity ~/.ssh/id_ed25519
+  --port 2222 --password
 ```
+
+키 인증을 사용할 때는 `--password` 대신 `--identity ~/.ssh/id_ed25519`를 지정할 수 있다.
+비밀번호 입력은 로컬 대화형 터미널에서 실행해야 한다. `sudo` 입력용 SSH 세션은 TTY를 사용하고,
+이미지 전송 세션은 TTY를 끄므로 바이너리 전송과 DB/media 백업 데이터를 보존한다.
 
 이미 빌드·검증한 로컬 ARM64 이미지 사용:
 
 ```sh
 python3 scripts/deploy_nas.py --host oms-nas \
-  --skip-build --image oms:2026.10.27-1
+  --password --skip-build --image oms:2026.10.27-1
 ```
 
 기본 이미지 태그는 UTC 시각과 무작위 suffix로 생성한다. `--image`로 지정할 때도 새 태그를 사용하며
