@@ -5,6 +5,7 @@ from contextlib import suppress
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
+import posixpath
 import re
 import shlex
 import subprocess
@@ -81,6 +82,8 @@ def parse_args(argv=None):
         parser.error('--host must be an SSH alias or user@hostname (use an alias for IPv6)')
     if not args.path.startswith('/') or any(c in args.path for c in '\n\r\0'):
         parser.error('--path must be an absolute NAS path without control characters')
+    # Normalize NAS paths independently of the local operating system.
+    args.path = posixpath.normpath('/' + args.path.lstrip('/'))
     if not re.fullmatch(r'[a-z0-9][a-z0-9_-]*', args.project):
         parser.error('--project must use lowercase letters, digits, underscores or hyphens')
     if not 1 <= args.port <= 65535:

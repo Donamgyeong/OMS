@@ -14,6 +14,8 @@ export APP_IMAGE
 # The SSH caller allocates a TTY. Prompt once here, then preserve Docker stdin/stdout.
 if [ "$docker_mode" = sudo ]; then sudo -v; fi
 cd "$target"
+# Canonicalize even when this script is called directly with a trailing slash.
+target=$(pwd -P)
 test -f .env
 mkdir "$target/.deploy-lock" 2>/dev/null || {
     echo 'Another deployment holds .deploy-lock. Check it before removing a stale lock.' >&2

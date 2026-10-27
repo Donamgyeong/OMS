@@ -75,8 +75,9 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
                         DEPLOY_TEST_LOG=str(self.log), DEPLOY_TEST_TOKEN=str(self.token))
 
-    def deploy(self, failure='', docker_mode='docker'):
-        return subprocess.run(['sh', str(REMOTE), str(self.target), str(self.release),
+    def deploy(self, failure='', docker_mode='docker', trailing_slash=False):
+        target = str(self.target) + ('/' if trailing_slash else '')
+        return subprocess.run(['sh', str(REMOTE), target, str(self.release),
                                'oms', 'oms:new', docker_mode, '0'],
                               env=dict(self.env, DEPLOY_TEST_FAIL=failure),
                               text=True, capture_output=True)
@@ -107,6 +108,12 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertFalse(any('stop' in a for a in self.calls()))
         self.assertEqual((self.target / '.env').read_text(), self.old_env)
         self.assertFalse((self.target / '.deploy-lock').exists())
+
+    def test_trailing_slash_does_not_duplicate_backup_path_separators(self):
+        result = self.deploy(trailing_slash=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn('//backups/', result.stdout + result.stderr)
+        self.assertTrue((self.target / 'backups/test-release/database.dump').is_file())
 
     def test_sudo_authentication_preserves_piped_input_and_backups(self):
         result = self.deploy(docker_mode='sudo')
@@ -155,6 +162,12 @@ class RemoteDeploymentTests(unittest.TestCase):
 
 
 class LocalDeploymentTests(unittest.TestCase):
+    def test_nas_path_normalization(self):
+        for path in ['/volume1/oms/', '/volume1//oms///', '//volume1/./oms/']:
+            with self.subTest(path=path):
+                self.assertEqual(parse_args(['--host', 'nas', '--path', path]).path, '/volume1/oms')
+        self.assertEqual(parse_args(['--host', 'nas']).path, '/volume1/oms')
+
     def test_preflight_reports_missing_env_before_sudo(self):
         with tempfile.TemporaryDirectory() as folder:
             args = parse_args(['--host', 'nas', '--path', folder])
