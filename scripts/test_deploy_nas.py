@@ -9,7 +9,7 @@ import subprocess
 import tempfile
 import unittest
 
-from deploy_nas import deploy, main, parse_args
+from deploy_nas import deploy, main, parse_args, preflight_script
 
 REMOTE = Path(__file__).with_name('deploy_nas_remote.sh')
 FAKE_DOCKER = r'''#!/usr/bin/env python3
@@ -41,8 +41,8 @@ FAKE_SUDO = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ['DEPLOY_TEST_LOG'], 'a') as f: f.write(json.dumps(['sudo']+sys.argv[1:])+'\n')
 if sys.argv[1:] == ['-v']: sys.exit(0)
-assert sys.argv[1:3] == ['-n','docker']
-os.execvp('docker', ['docker']+sys.argv[3:])
+assert sys.argv[1] == '-n' and os.path.basename(sys.argv[2]) == 'docker'
+os.execv(sys.argv[2], [sys.argv[2]]+sys.argv[3:])
 '''
 
 
@@ -113,7 +113,7 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         calls = self.calls()
         self.assertEqual(calls[0], ['sudo', '-v'])
-        self.assertTrue(any(a[:3] == ['sudo', '-n', 'docker'] for a in calls))
+        self.assertTrue(any(a[:2] == ['sudo', '-n'] and Path(a[2]).name == 'docker' for a in calls))
         self.assertTrue((self.target / 'backups/test-release/database.dump').is_file())
         self.assertTrue((self.target / 'backups/test-release/media.tar.gz').is_file())
 
@@ -155,6 +155,37 @@ class RemoteDeploymentTests(unittest.TestCase):
 
 
 class LocalDeploymentTests(unittest.TestCase):
+    def test_preflight_reports_missing_env_before_sudo(self):
+        with tempfile.TemporaryDirectory() as folder:
+            args = parse_args(['--host', 'nas', '--path', folder])
+            result = subprocess.run(['sh', '-c', preflight_script(args)], text=True, capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('ERROR: .env exists in ' + folder, result.stderr)
+            self.assertNotIn('CHECK: sudo', result.stdout)
+
+    def test_preflight_identifies_docker_failure(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / '.env').write_text('fixture')
+            (root / 'docker').write_text('#!/bin/sh\nexit 17\n')
+            (root / 'docker').chmod(0o755)
+            args = parse_args(['--host', 'nas', '--path', folder, '--no-sudo'])
+            result = subprocess.run(['sh', '-c', preflight_script(args)], text=True, capture_output=True,
+                                    env=dict(os.environ, PATH=folder + ':' + os.environ['PATH']))
+            self.assertEqual(result.returncode, 17)
+            self.assertIn('CHECK: Docker daemon access', result.stdout)
+            self.assertIn('ERROR: Docker daemon access (exit 17)', result.stderr)
+
+    def test_check_only_does_not_build_or_transfer(self):
+        from unittest.mock import patch
+        args = parse_args(['--host', 'nas', '--password', '--check-only'])
+        with patch('deploy_nas.run') as run, patch('deploy_nas.subprocess.check_output') as output:
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(deploy(args, '/tmp/test-control'), 0)
+            self.assertEqual(run.call_count, 1)
+            self.assertIn('-tt', run.call_args.args[0])
+            output.assert_not_called()
+
     def test_password_mode_uses_tty_for_sudo_and_no_tty_for_binary_transfer(self):
         from unittest.mock import patch
         with tempfile.TemporaryDirectory() as folder:

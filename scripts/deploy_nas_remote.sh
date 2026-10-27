@@ -2,7 +2,8 @@
 # Called by deploy_nas.py; requires POSIX sh, Compose v2, tar and sha256sum.
 set -eu
 umask 077
-export PATH="$PATH:/usr/local/bin:/var/packages/ContainerManager/target/usr/bin"
+export PATH="$PATH:/usr/local/bin:/var/packages/ContainerManager/target/usr/bin:/var/packages/Docker/target/usr/bin"
+docker_bin=$(command -v docker) || { echo 'Docker executable not found on NAS.' >&2; exit 1; }
 target=$1
 release=$2
 project=$3
@@ -36,9 +37,9 @@ trap 'exit 143' TERM HUP
 d() {
     if [ "$docker_mode" = sudo ]; then
         # Refresh/re-prompt after long builds or migrations; never consume piped Docker input.
-        sudo -v && sudo -n docker "$@"
+        sudo -v && sudo -n "$docker_bin" "$@"
     else
-        docker "$@"
+        "$docker_bin" "$@"
     fi
 }
 c() {

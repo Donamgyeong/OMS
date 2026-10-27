@@ -43,6 +43,19 @@ Host oms-nas
 python3 scripts/deploy_nas.py --host oms-nas --dry-run
 ```
 
+NAS에 연결해 사전 검사만 실행 (빌드·전송·서비스 변경 없음):
+
+```sh
+python3 scripts/deploy_nas.py --host oms-nas --password --check-only
+```
+
+각 항목에 `CHECK` / `OK`를 표시하고 실패 항목은 `ERROR`로 출력한다. `.env` 존재·읽기 권한,
+배포 폴더 쓰기 권한, 필수 명령, sudo 인증, Docker daemon, Compose를 구분한다.
+`Shared connection ... closed`는 SSH 세션 종료 안내이며 원인은 직전 `ERROR`에서 확인한다.
+`.env` 관련 오류면 NAS의 지정 폴더에 운영 설정을 준비하고, 폴더 권한 오류면 SSH 사용자가 해당 배포 폴더에
+쓰기 가능한지 NAS ACL·소유권을 확인한다. 스크립트가 기존 폴더 권한이나 비밀값을 자동 변경하지는 않는다.
+Docker 실행 경로는 NAS에서 찾은 절대 경로를 sudo에 전달하여 sudo의 PATH 차이를 피한다.
+
 경로와 SSH 포트를 직접 지정하고 비밀번호로 인증:
 
 ```sh

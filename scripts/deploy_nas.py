@@ -17,8 +17,48 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def run(command, **kwargs):
-    print('+ ' + shlex.join(str(part) for part in command), flush=True)
+    display = list(command)
+    if display[0] == 'ssh':
+        display[-1] = '[remote command]'
+    print('+ ' + shlex.join(str(part) for part in display), flush=True)
     return subprocess.run(command, check=True, **kwargs)
+
+
+def preflight_script(args):
+    checks = r'''set -eu
+export PATH="$PATH:/usr/local/bin:/var/packages/ContainerManager/target/usr/bin:/var/packages/Docker/target/usr/bin"
+check() {
+    label=$1
+    shift
+    printf 'CHECK: %s\n' "$label"
+    if "$@"; then
+        printf 'OK: %s\n' "$label"
+    else
+        result=$?
+        printf 'ERROR: %s (exit %s)\n' "$label" "$result" >&2
+        exit "$result"
+    fi
+}
+'''
+    steps = [
+        ('NAS deployment directory: ' + args.path, ['cd', args.path]),
+        ('.env exists in ' + args.path + ' (prepare the NAS runtime .env first)', ['test', '-f', '.env']),
+        ('.env readable by SSH user (check owner and permissions)', ['test', '-r', '.env']),
+        ('Deployment directory writable by SSH user (needed for releases, backups and config)', ['test', '-w', '.']),
+        ('sha256sum available on NAS', ['sh', '-c', 'command -v sha256sum >/dev/null']),
+        ('tar available on NAS', ['sh', '-c', 'command -v tar >/dev/null']),
+        ('Docker executable available on NAS', ['sh', '-c', 'command -v docker >/dev/null']),
+    ]
+    checks += '\n'.join('check ' + shlex.join([label] + command) for label, command in steps) + '\n'
+    checks += 'docker_bin=$(command -v docker)\n'
+    if not args.no_sudo:
+        checks += 'check "sudo authentication for Docker" sudo -v\n'
+    prefix = '' if args.no_sudo else 'sudo -n '
+    checks += f'docker_info() {{ {prefix}"$docker_bin" info >/dev/null; }}\n'
+    checks += 'check "Docker daemon access" docker_info\n'
+    checks += f'check "Docker Compose plugin" {prefix}"$docker_bin" compose version\n'
+    checks += 'printf "NAS preflight passed.\\n"\n'
+    return checks
 
 
 def parse_args(argv=None):
@@ -35,6 +75,7 @@ def parse_args(argv=None):
     parser.add_argument('--no-sudo', action='store_true', help='NAS user can run docker directly')
     parser.add_argument('--teams', action='store_true', help='Start Teams worker (requires NAS TEAMS_ENABLED=1)')
     parser.add_argument('--dry-run', action='store_true', help='Show plan without Docker, SSH or file changes')
+    parser.add_argument('--check-only', action='store_true', help='Run labeled NAS checks without building or deploying')
     args = parser.parse_args(argv)
     if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.@-]*', args.host):
         parser.error('--host must be an SSH alias or user@hostname (use an alias for IPv6)')
@@ -74,16 +115,11 @@ def deploy(args, control_path):
         return 0
 
     # Fail before building/transferring if SSH, permissions or sudo are unavailable.
-    preflight = '\n'.join([
-        'set -eu', 'export PATH="$PATH:/usr/local/bin:/var/packages/ContainerManager/target/usr/bin"',
-        'cd ' + shlex.quote(args.path), 'test -f .env', 'test -w .',
-        'command -v sha256sum >/dev/null', 'command -v tar >/dev/null',
-        *([] if args.no_sudo else ['sudo -v']),
-        ('docker' if args.no_sudo else 'sudo -n docker') + ' info >/dev/null',
-        ('docker' if args.no_sudo else 'sudo -n docker') + ' compose version',
-    ])
+    preflight = preflight_script(args)
     # A real remote TTY lets sudo prompt securely; subsequent Docker calls use its cache.
     run(ssh + ['-tt', args.host, 'sh -c ' + shlex.quote(preflight)])
+    if args.check_only:
+        return 0
     if not args.skip_build:
         run(['docker', 'buildx', 'build', '--platform', 'linux/arm64', '--load', '-t', image, '.'], cwd=ROOT)
     architecture = subprocess.check_output(
@@ -144,7 +180,10 @@ def main(argv=None):
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (subprocess.CalledProcessError, OSError, RuntimeError) as error:
+    except subprocess.CalledProcessError as error:
+        print(f'Deployment failed (exit {error.returncode}). See the CHECK/ERROR output above.', file=sys.stderr)
+        sys.exit(1)
+    except (OSError, RuntimeError) as error:
         print(f'Deployment failed: {error}', file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
