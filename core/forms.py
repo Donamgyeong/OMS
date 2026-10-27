@@ -1,5 +1,5 @@
 from django import forms
-from .models import Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord
+from .models import ApprovalSettings, Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord
 from .services import PLAN_FIELDS, RECORD_FIELDS
 
 
@@ -62,7 +62,22 @@ class MemberForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["designated_approver"].queryset = User.objects.filter(is_active=True).exclude(pk=self.instance.pk)
+        field = self.fields["designated_approver"]
+        field.queryset = User.objects.filter(is_active=True)
+        if not self.instance.is_superuser:
+            field.queryset = field.queryset.exclude(pk=self.instance.pk)
+        field.empty_label = "자동 선택 (일반 사용자: 부서장 / 부서장: 최고관리자 / 최고관리자: 본인)"
+        field.help_text = "직접 지정하면 자동 선택보다 우선합니다. 부서·역할 변경 시 자동 선택은 새 기준을 적용합니다."
+        if self.instance.pk:
+            is_head = Department.objects.filter(head=self.instance).exists()
+            if is_head != (self.instance.role == User.Role.MANAGER) and not self.instance.is_superuser:
+                field.help_text += " 부서장 역할과 부서의 부서장 지정을 함께 확인하세요."
+            from .services import resolve_approver
+            from django.core.exceptions import ValidationError
+            try:
+                field.help_text += f" 현재 적용 승인자: {resolve_approver(self.instance)}"
+            except ValidationError as exc:
+                field.help_text += " " + " ".join(exc.messages)
 
 
 class DepartmentForm(forms.ModelForm):
@@ -79,7 +94,17 @@ class PolicyForm(forms.ModelForm):
 
 
 class HolidayForm(forms.ModelForm):
+    def save(self, commit=True):
+        self.instance.is_manual = True
+        return super().save(commit=commit)
+
     class Meta:
         model = Holiday
         fields = ("date", "name")
         widgets = {"date": forms.DateInput(attrs={"type": "date"})}
+
+
+class ApprovalSettingsForm(forms.ModelForm):
+    class Meta:
+        model = ApprovalSettings
+        fields = ('default_administrator',)

@@ -10,6 +10,7 @@ project=$3
 APP_IMAGE=$4
 docker_mode=$5
 teams=$6
+holidays=${7:-0}
 export APP_IMAGE
 # The SSH caller allocates a TTY. Prompt once here, then preserve Docker stdin/stdout.
 if [ "$docker_mode" = sudo ]; then sudo -v; fi
@@ -60,7 +61,7 @@ d() {
 }
 c() {
     d compose --project-directory "$target" --env-file "$target/.env" \
-        -p "$project" -f "$release/compose.cloudflare.yaml" --profile teams "$@"
+        -p "$project" -f "$release/compose.cloudflare.yaml" --profile teams --profile holidays "$@"
 }
 cd "$release"
 step archive-checksum
@@ -104,11 +105,17 @@ c run --rm --no-deps app python manage.py check --deploy --fail-level ERROR
 # Preserve an already running worker on routine updates.
 step existing-containers
 worker=$(c ps --status running -q teams-worker)
+holiday_worker=$(c ps --status running -q holiday-worker)
 app=$(c ps -a -q app)
 if [ -n "$worker" ]; then teams=1; fi
+if [ -n "$holiday_worker" ]; then holidays=1; fi
 if [ "$teams" = 1 ]; then
     step teams-settings
     c run --rm --no-deps app python -c 'import os; os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings"); from django.conf import settings; assert settings.TEAMS_ENABLED, "Set TEAMS_ENABLED=1 on NAS before --teams"'
+fi
+if [ "$holidays" = 1 ]; then
+    step holiday-settings
+    c run --rm --no-deps app python -c 'import os; from uuid import UUID; os.environ.setdefault("DJANGO_SETTINGS_MODULE", "config.settings"); from django.conf import settings; required = ("HOLIDAY_TENANT_ID", "HOLIDAY_CLIENT_ID", "HOLIDAY_CLIENT_SECRET", "HOLIDAY_MAILBOX", "HOLIDAY_CALENDAR_ID"); missing = [key for key in required if not getattr(settings, key)]; assert not missing, "Set NAS holiday settings before --holidays: " + ", ".join(missing); UUID(settings.HOLIDAY_TENANT_ID)'
 fi
 step database-health
 c up -d --wait --wait-timeout 180 db
@@ -119,7 +126,7 @@ mkdir -p "$backup"
 cp .env "$backup/env.before"
 if [ -f compose.cloudflare.yaml ]; then cp compose.cloudflare.yaml "$backup/compose.before.yaml"; fi
 step backup
-c stop app teams-worker
+c stop app teams-worker holiday-worker
 c exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc' > "$backup/database.dump.tmp"
 test -s "$backup/database.dump.tmp"
 mv "$backup/database.dump.tmp" "$backup/database.dump"
@@ -135,6 +142,10 @@ c run --rm --no-deps app python manage.py migrate --noinput
 step app-startup
 c up -d --wait --wait-timeout 180 app
 if [ "$teams" = 1 ]; then c up -d teams-worker; fi
+if [ "$holidays" = 1 ]; then
+    step holiday-worker-startup
+    c up -d --wait --wait-timeout 180 holiday-worker
+fi
 step tunnel-startup
 c up -d --force-recreate --no-deps --wait --wait-timeout 180 cloudflared
 c exec -T cloudflared cloudflared tunnel --metrics 127.0.0.1:2000 ready

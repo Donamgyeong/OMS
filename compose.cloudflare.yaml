@@ -1,6 +1,23 @@
 # Standalone deployment: use this file instead of compose.yaml (do not merge).
 # Public hostname and service URL http://app:8000 are configured in Cloudflare.
 services:
+  holiday-worker:
+    image: ${APP_IMAGE:-oms:local}
+    platform: linux/arm64
+    profiles: [holidays]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+      DJANGO_DEBUG: "0"
+    command: ["python", "manage.py", "sync_holidays", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - tunnel
+      - database
+    restart: unless-stopped
+    mem_limit: 256m
   teams-worker:
     image: ${APP_IMAGE:-oms:local}
     platform: linux/arm64

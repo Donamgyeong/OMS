@@ -8,9 +8,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from datetime import datetime
-from .models import Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord, Notification
+from .models import ApprovalSettings, HolidaySyncState, Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord, Notification
 from .selectors import visible_to
-from .forms import PlanForm, RecordForm, DecisionForm, DepartmentForm, HolidayForm, MemberForm, PolicyForm
+from .forms import ApprovalSettingsForm, PlanForm, RecordForm, DecisionForm, DepartmentForm, HolidayForm, MemberForm, PolicyForm
 from . import services
 
 
@@ -123,7 +123,7 @@ def plan_detail(request, pk):
         "events": display_events(plan.approval_events.select_related("actor"), OvertimePlan), "linked_records": records.filter(plan=plan),
         "monthly_context": monthly_context,
         "is_owner": plan.user_id == request.user.pk,
-        "can_decide": plan.approver_id == request.user.pk and plan.user_id != request.user.pk and plan.status == OvertimePlan.Status.PENDING,
+        "can_decide": services.can_decide(request.user, plan),
         "can_edit": plan.user_id == request.user.pk and plan.status in (OvertimePlan.Status.DRAFT, OvertimePlan.Status.REJECTED, OvertimePlan.Status.CONFIRMED, OvertimePlan.Status.APPROVED)})
 
 
@@ -145,7 +145,9 @@ def plan_action(request, pk):
 
 @login_required
 def approval_inbox(request):
-    plans = OvertimePlan.objects.filter(approver=request.user).exclude(user=request.user).select_related("user", "department")
+    plans = OvertimePlan.objects.filter(approver=request.user).select_related("user", "department")
+    if not request.user.is_superuser:
+        plans = plans.exclude(user=request.user)
     return render(request, "core/approvals.html", {"pending": plans.filter(status=OvertimePlan.Status.PENDING),
         "processed": plans.exclude(status=OvertimePlan.Status.PENDING)})
 
@@ -198,9 +200,23 @@ def require_administrator(user):
 @login_required
 def setup(request):
     require_administrator(request.user)
+    sync_state = HolidaySyncState.objects.filter(pk=1).first()
+    affected = WorkRecord.objects.none()
+    if sync_state and sync_state.changed_dates:
+        days = set(sync_state.changed_dates)
+        candidates = WorkRecord.objects.filter(
+            started_at__date__lte=max(days), ended_at__date__gte=min(days)
+        ).select_related("user").order_by("work_date").iterator()
+        affected = []
+        for record in candidates:
+            if days.intersection(record.daily_minutes) or (not record.daily_minutes and str(record.work_date) in days):
+                affected.append(record)
+                if len(affected) == 100:
+                    break
     return render(request, "core/setup.html", {"members": visible_members(request.user),
         "departments": Department.objects.select_related("head", "parent"),
-        "policies": OvertimePolicy.objects.all(), "holidays": Holiday.objects.order_by("date")})
+        "policies": OvertimePolicy.objects.all(), "holidays": Holiday.objects.order_by("date"),
+        "holiday_sync": sync_state, "holiday_affected_records": affected})
 
 
 @login_required
@@ -208,7 +224,12 @@ def setup_edit(request, kind, pk=None):
     require_administrator(request.user)
     if kind == "member" and pk is None:
         raise Http404("사용자는 Microsoft 회사 계정으로 첫 로그인할 때 생성됩니다.")
-    configs = {"member": (User, MemberForm, "사용자"), "department": (Department, DepartmentForm, "부서"),
+    if kind == "approval":
+        if not request.user.is_superuser:
+            raise PermissionDenied
+        ApprovalSettings.objects.get_or_create(pk=1)
+        pk = 1
+    configs = {"approval": (ApprovalSettings, ApprovalSettingsForm, "기본 결재 설정"), "member": (User, MemberForm, "사용자"), "department": (Department, DepartmentForm, "부서"),
         "policy": (OvertimePolicy, PolicyForm, "초과 근무 정책"), "holiday": (Holiday, HolidayForm, "휴일")}
     if kind not in configs:
         raise Http404
@@ -235,7 +256,7 @@ def setup_edit(request, kind, pk=None):
                 change_message=f"기초정보 화면: {', '.join(form.changed_data)}")
         messages.success(request, f"{title} 정보를 저장했습니다.")
         return redirect("setup")
-    return render(request, "core/form.html", {"form": form, "heading": f"{title} {'수정' if pk else '등록'}", "is_setup": True})
+    return render(request, "core/form.html", {"form": form, "member_preview_id": obj.pk if kind == "member" else None, "heading": f"{title} {'수정' if pk else '등록'}", "is_setup": True})
 
 
 def display_events(events, model):
@@ -261,3 +282,37 @@ def display_events(events, model):
             item.changes.append({"label": labels.get(key, str(field.verbose_name)),
                 "before": display(before.get(key)), "after": display(after.get(key))})
     return result
+
+
+@login_required
+@require_POST
+def holiday_sync(request):
+    require_administrator(request.user)
+    from .holidays import sync_holidays, SyncError
+    try:
+        count = sync_holidays()
+        messages.success(request, f"{count}일 휴일을 동기화했습니다.")
+    except SyncError as exc:
+        messages.error(request, str(exc))
+    return redirect("setup")
+
+
+@login_required
+def approver_preview(request, pk):
+    require_administrator(request.user)
+    member = get_object_or_404(User, pk=pk)
+    if member.is_superuser and not request.user.is_superuser:
+        raise PermissionDenied
+    role = request.GET.get("role", member.role)
+    if role not in User.Role.values:
+        raise Http404
+    department_id = request.GET.get("department", "")
+    if department_id and not department_id.isdecimal():
+        raise Http404
+    member.department = get_object_or_404(Department, pk=department_id) if department_id else None
+    member.role = role
+    try:
+        approver = services.default_approver(member)
+        return JsonResponse({"label": f"자동 선택: {approver.display_name}"})
+    except ValidationError as exc:
+        return JsonResponse({"label": " / ".join(exc.messages)})

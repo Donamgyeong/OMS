@@ -129,3 +129,10 @@ LOGGING = {"version": 1, "disable_existing_loggers": False,
     "loggers": {"django.server": {"handlers": ["django.server"], "level": "INFO", "propagate": False},
         "authlib": {"level": "WARNING"}},
     "root": {"handlers": ["console"], "level": "INFO"}}
+
+# Separate read-only Graph application credentials for the company holiday calendar.
+HOLIDAY_TENANT_ID = os.getenv('HOLIDAY_TENANT_ID', '').strip()
+HOLIDAY_CLIENT_ID = os.getenv('HOLIDAY_CLIENT_ID', '').strip()
+HOLIDAY_CLIENT_SECRET = os.getenv('HOLIDAY_CLIENT_SECRET', '').strip()
+HOLIDAY_MAILBOX = os.getenv('HOLIDAY_MAILBOX', '').strip()
+HOLIDAY_CALENDAR_ID = os.getenv('HOLIDAY_CALENDAR_ID', '').strip()

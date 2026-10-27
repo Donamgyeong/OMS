@@ -88,6 +88,7 @@ def parse_args(argv=None):
     parser.add_argument('--skip-build', action='store_true', help='Use an existing local ARM64 image')
     parser.add_argument('--no-sudo', action='store_true', help='NAS user can run docker directly')
     parser.add_argument('--teams', action='store_true', help='Start Teams worker (requires NAS TEAMS_ENABLED=1)')
+    parser.add_argument('--holidays', action='store_true', help='Start daily holiday sync worker (requires NAS HOLIDAY_* settings)')
     parser.add_argument('--dry-run', action='store_true', help='Show plan without Docker, SSH or file changes')
     parser.add_argument('--check-only', action='store_true', help='Run labeled NAS checks without building or deploying')
     args = parser.parse_args(argv)
@@ -127,6 +128,7 @@ def deploy(args, control_path):
         print('Plan: SSH preflight → ARM64 build/inspect → save/checksum → SSH transfer')
         print('NAS: lock → verify/load → config/security checks → stop writers → DB/media backups')
         print('NAS: migrate → start app/worker/tunnel → health checks → persist image tag')
+        print(f'Enable workers: teams={args.teams}, holidays={args.holidays}; preserve already running workers')
         print('Runtime .env and secrets stay on NAS. Artifacts: dist/nas/<release>/')
         return 0
 
@@ -171,7 +173,7 @@ def deploy(args, control_path):
         run(ssh + ['-T', args.host, 'sh -c ' + shlex.quote(receive)], stdin=stream)
     command = shlex.join(['sh', remote_release + '/deploy_nas_remote.sh',
                           args.path, remote_release, args.project, image, docker,
-                          '1' if args.teams else '0'])
+                          '1' if args.teams else '0', '1' if args.holidays else '0'])
     run(ssh + ['-tt', args.host, command])
     payload.unlink()
     print(f'Deployment complete. Local artifacts: {stage}')

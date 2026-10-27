@@ -108,6 +108,10 @@ class ApprovalAdmin(SuperuserOnly, admin.ModelAdmin):
 
 @admin.register(Holiday)
 class HolidayAdmin(SuperuserOnly, admin.ModelAdmin):
+    def save_model(self, request, obj, form, change):
+        obj.is_manual = True
+        super().save_model(request, obj, form, change)
+
     list_display = ("date", "name")
 
 

@@ -1,4 +1,17 @@
 services:
+  holiday-worker:
+    image: ${APP_IMAGE:-oms:local}
+    platform: linux/arm64
+    profiles: [holidays]
+    env_file: .env
+    environment:
+      POSTGRES_HOST: db
+    command: ["python", "manage.py", "sync_holidays", "--watch"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    mem_limit: 256m
   teams-worker:
     image: ${APP_IMAGE:-oms:local}
     platform: linux/arm64

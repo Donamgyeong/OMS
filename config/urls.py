@@ -23,6 +23,8 @@ urlpatterns = [
     path("records/<int:pk>/edit/", views.record_edit, name="record_edit"),
     path("notifications/<int:pk>/read/", views.notification_read, name="notification_read"),
     path("setup/", views.setup, name="setup"),
+    path("setup/members/<int:pk>/approver/", views.approver_preview, name="approver_preview"),
+    path("setup/holidays/sync/", views.holiday_sync, name="holiday_sync"),
     path("setup/<str:kind>/new/", views.setup_edit, name="setup_create"),
     path("setup/<str:kind>/<int:pk>/", views.setup_edit, name="setup_edit"),
 ]

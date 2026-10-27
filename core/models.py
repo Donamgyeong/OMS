@@ -51,7 +51,7 @@ class User(AbstractUser):
 
     def clean(self):
         super().clean()
-        if self.designated_approver_id and self.designated_approver_id == self.pk:
+        if self.designated_approver_id and self.designated_approver_id == self.pk and not self.is_superuser:
             raise ValidationError("본인을 지정 승인자로 설정할 수 없습니다.")
         if not self.working_weekdays or any(day not in "0123456" or len(day) != 1 for day in self.working_weekdays.split(",")):
             raise ValidationError("근무 요일은 0~6을 쉼표로 구분하세요.")
@@ -207,6 +207,7 @@ class WorkRecord(models.Model):
 class Holiday(models.Model):
     date = models.DateField("휴일", unique=True)
     name = models.CharField("이름", max_length=100)
+    is_manual = models.BooleanField(default=True)
 
     def __str__(self):
         return f"{self.date} {self.name}"
@@ -267,3 +268,34 @@ class TeamsDelivery(models.Model):
     class Meta:
         constraints = [models.UniqueConstraint(fields=["event", "recipient", "kind"], name="unique_teams_delivery")]
         indexes = [models.Index(fields=["status", "next_attempt_at"])]
+
+
+class ApprovalSettings(models.Model):
+    default_administrator = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL,
+        limit_choices_to={"is_superuser": True, "is_active": True}, verbose_name="기본 최고관리자")
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def clean(self):
+        if self.default_administrator_id and not (self.default_administrator.is_active and self.default_administrator.is_superuser):
+            raise ValidationError("활성 최고관리자를 선택하세요.")
+
+
+class HolidaySource(models.Model):
+    calendar_key = models.CharField(max_length=500)
+    event_id = models.CharField(max_length=1000)
+    date = models.DateField()
+    name = models.CharField(max_length=100)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["calendar_key", "event_id", "date"], name="unique_holiday_source")]
+
+
+class HolidaySyncState(models.Model):
+    running_until = models.DateTimeField(null=True, blank=True)
+    last_success = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=200, blank=True)
+    count = models.PositiveIntegerField(default=0)
+    changed_dates = models.JSONField(default=list, blank=True)

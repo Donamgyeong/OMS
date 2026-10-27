@@ -5,7 +5,7 @@ from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 from django.utils import timezone
-from .models import (ApprovalEvent, Holiday, Notification, OvertimePlan,
+from .models import (ApprovalEvent, Department, Holiday, Notification, OvertimePlan,
                      OvertimePolicy, User, WorkRecord, WorkRecordEvent)
 
 COUNTED = (OvertimePlan.Status.CONFIRMED, OvertimePlan.Status.PENDING, OvertimePlan.Status.APPROVED)
@@ -51,17 +51,44 @@ def policy_on(day):
     return policy
 
 
+def default_approver(user):
+    if user.is_superuser:
+        candidate = user
+    elif user.role == User.Role.MANAGER or Department.objects.filter(head=user).exists():
+        from .models import ApprovalSettings
+        config = ApprovalSettings.objects.filter(pk=1).first()
+        if config and config.default_administrator_id:
+            candidate = config.default_administrator
+            if not candidate.is_superuser:
+                raise ValidationError("기본 최고관리자의 권한을 확인하세요.")
+        else:
+            candidates = list(User.objects.filter(is_superuser=True, is_active=True)[:2])
+            if len(candidates) != 1:
+                raise ValidationError("기본 최고관리자를 설정하세요.")
+            candidate = candidates[0]
+    else:
+        candidate = user.department.head if user.department_id else None
+    return validate_approver(user, candidate)
+
+
+def validate_approver(user, candidate):
+    if (not candidate or not candidate.is_active
+            or (candidate.pk == user.pk and not user.is_superuser)
+            or (candidate.department_id and not candidate.department.active)):
+        raise ValidationError("유효한 승인자가 없습니다. 부서장 또는 지정 승인자를 확인하세요.")
+    return candidate
+
+
 def resolve_approver(user):
     if user.designated_approver_id:
-        candidate = user.designated_approver
-    else:
-        dept = user.department
-        candidate = dept.head if dept else None
-        if candidate and candidate.pk == user.pk:
-            candidate = dept.parent.head if dept.parent else None
-    if not candidate or not candidate.is_active or candidate.pk == user.pk or (candidate.department_id and not candidate.department.active):
-        raise ValidationError("승인자가 지정되지 않았습니다. 부서장 또는 본인 신청의 지정 승인자를 등록하세요.")
-    return candidate
+        return validate_approver(user, user.designated_approver)
+    return default_approver(user)
+
+
+def can_decide(user, plan):
+    return (user.is_active and plan.approver_id == user.pk
+            and (plan.user_id != user.pk or user.is_superuser)
+            and plan.status == OvertimePlan.Status.PENDING)
 
 
 def check_version(obj, version):
@@ -133,6 +160,10 @@ def decide_submission(plan, owner):
     plan.status = OvertimePlan.Status.PENDING if needs_approval else OvertimePlan.Status.CONFIRMED
     if needs_approval:
         plan.approver = resolve_approver(owner)
+        plan.policy_snapshot["approval_route"] = {
+            "mode": "designated" if owner.designated_approver_id else "automatic",
+            "role": owner.role, "is_superuser": owner.is_superuser,
+            "approver_id": plan.approver_id}
     plan.submitted_at = timezone.now()
     start = timezone.make_aware(datetime.combine(plan.work_date, plan.start_time))
     plan.is_retrospective = start <= plan.submitted_at
@@ -146,7 +177,7 @@ def transition_plan(actor, pk, action, version, comment=""):
     check_version(plan, version)
     before = snapshot(plan)
     if action in ("approve", "reject"):
-        if plan.approver_id != actor.pk or plan.user_id == actor.pk:
+        if not actor.is_active or plan.approver_id != actor.pk or (plan.user_id == actor.pk and not actor.is_superuser):
             raise PermissionDenied
         if plan.status != OvertimePlan.Status.PENDING:
             raise ValidationError("승인 대기 상태에서만 결재할 수 있습니다.")

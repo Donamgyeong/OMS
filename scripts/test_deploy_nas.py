@@ -31,6 +31,12 @@ elif a[0] == 'compose':
         print(json.dumps({'secrets':{'cloudflared_token':{'file':os.environ['DEPLOY_TEST_TOKEN']}}}))
     elif action == 'run' and 'check' in a and os.environ.get('DEPLOY_TEST_FAIL') == 'preflight':
         sys.exit(11)
+    elif action == 'run' and any('HOLIDAY_TENANT_ID' in x for x in a) and os.environ.get('DEPLOY_TEST_FAIL') == 'holiday-settings':
+        sys.exit(16)
+    elif action == 'up' and 'holiday-worker' in a and os.environ.get('DEPLOY_TEST_FAIL') == 'holiday-startup':
+        sys.exit(18)
+    elif action == 'ps' and 'holiday-worker' in a and os.environ.get('DEPLOY_TEST_HOLIDAY_RUNNING') == '1':
+        print('old-holiday-id')
     elif action == 'run' and 'migrate' in a and os.environ.get('DEPLOY_TEST_FAIL') == 'migration':
         sys.exit(12)
     elif action == 'exec' and 'db' in a:
@@ -79,11 +85,12 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + ':' + os.environ['PATH'],
                         DEPLOY_TEST_LOG=str(self.log), DEPLOY_TEST_TOKEN=str(self.token))
 
-    def deploy(self, failure='', docker_mode='docker', trailing_slash=False, image_id='sha256:fixture'):
+    def deploy(self, failure='', docker_mode='docker', trailing_slash=False, image_id='sha256:fixture', holidays=False, running_holidays=False):
         target = str(self.target) + ('/' if trailing_slash else '')
         return subprocess.run(['sh', str(REMOTE), target, str(self.release),
-                               'oms', 'oms:new', docker_mode, '0'],
-                              env=dict(self.env, DEPLOY_TEST_FAIL=failure, DEPLOY_TEST_IMAGE_ID=image_id),
+                               'oms', 'oms:new', docker_mode, '0', '1' if holidays else '0'],
+                              env=dict(self.env, DEPLOY_TEST_FAIL=failure, DEPLOY_TEST_IMAGE_ID=image_id,
+                                       DEPLOY_TEST_HOLIDAY_RUNNING='1' if running_holidays else '0'),
                               text=True, capture_output=True)
 
     def calls(self):
@@ -105,6 +112,43 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertEqual((self.target / '.env').read_text(), self.old_env.replace('oms:old', 'oms:new'))
         self.assertEqual((self.target / 'compose.cloudflare.yaml').read_text(), 'new-compose\n')
         self.assertFalse((self.target / '.deploy-lock').exists())
+
+    def test_holiday_worker_first_activation_and_existing_worker_upgrade(self):
+        for options in ({'holidays': True}, {'running_holidays': True}):
+            with self.subTest(options=options):
+                if self.log.exists():
+                    self.log.unlink()
+                result = self.deploy(**options)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = self.calls()
+                stop = next(i for i, a in enumerate(calls) if 'stop' in a)
+                self.assertIn('holiday-worker', calls[stop])
+                check = next(i for i, a in enumerate(calls) if any('HOLIDAY_TENANT_ID' in x for x in a))
+                migrate = next(i for i, a in enumerate(calls) if 'migrate' in a)
+                start = next(i for i, a in enumerate(calls) if 'up' in a and 'holiday-worker' in a)
+                self.assertLess(check, stop)
+                self.assertLess(migrate, start)
+                self.assertIn('--wait', calls[start])
+
+    def test_holiday_settings_failure_does_not_stop_writers(self):
+        result = self.deploy('holiday-settings', holidays=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('holiday-settings', result.stderr)
+        self.assertFalse(any('stop' in a for a in self.calls()))
+        self.assertEqual((self.target / '.env').read_text(), self.old_env)
+
+    def test_holiday_startup_failure_does_not_publish_configuration(self):
+        result = self.deploy('holiday-startup', holidays=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('holiday-worker-startup', result.stderr)
+        self.assertEqual((self.target / '.env').read_text(), self.old_env)
+        self.assertEqual((self.target / 'compose.cloudflare.yaml').read_text(), 'old-compose\n')
+        self.assertTrue((self.target / 'backups/test-release/database.dump').is_file())
+
+    def test_disabled_holiday_worker_is_not_started(self):
+        result = self.deploy()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any('up' in a and 'holiday-worker' in a for a in self.calls()))
 
     def test_preflight_failure_does_not_stop_existing_service(self):
         result = self.deploy('preflight')
@@ -258,7 +302,7 @@ class LocalDeploymentTests(unittest.TestCase):
             (root / 'scripts').mkdir()
             (root / 'compose.cloudflare.yaml').write_text('fixture')
             (root / 'scripts/deploy_nas_remote.sh').write_text('fixture')
-            args = parse_args(['--host', 'nas', '--password', '--skip-build', '--image', 'oms:test'])
+            args = parse_args(['--host', 'nas', '--password', '--skip-build', '--image', 'oms:test', '--holidays'])
             def fake_run(command, **kwargs):
                 if command[:2] == ['docker', 'save']:
                     self.image_archive(Path(command[3]))
@@ -276,6 +320,7 @@ class LocalDeploymentTests(unittest.TestCase):
             self.assertIn('sudo -v', ssh_calls[0][-1])
             self.assertIn('-T', ssh_calls[1])
             self.assertIn('-tt', ssh_calls[2])
+            self.assertTrue(ssh_calls[2][-1].endswith('sudo 0 1'))
 
     def test_connection_is_closed_when_deployment_fails(self):
         from unittest.mock import patch

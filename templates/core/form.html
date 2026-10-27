@@ -4,4 +4,37 @@
 {% if is_plan %}<div class="toolbar"><button name="intent" value="preview">제출 전 계산</button><button name="intent" value="save">임시 저장</button><button name="intent" value="submit">제출</button></div>{% else %}<button>저장</button>{% endif %}</form>
 {% if preview %}<section class="notice"><h2>제출 예상</h2><p>이번 신청 {{ preview.duration_minutes|duration }} · {{ preview.get_status_display }}{% if preview.approver %} · 승인자 {{ preview.approver }}{% endif %}</p>
 {% for month,item in preview.monthly_snapshot.items %}<p>{{ month }}: 현재 누적 {{ item.previous|duration }} + 신청 {{ item.requested|duration }} = 제출 후 {{ item.total|duration }} / 기준 {{ item.threshold|duration }} · 제출 후 남은 무승인 시간 {{ item.remaining|duration }}</p>{% endfor %}<p>실제 제출 시 최신 누적과 정책으로 다시 계산합니다.</p></section>{% endif %}
+{% if member_preview_id %}
+<p id="approver-preview" role="status"></p>
+<script>
+(() => {
+  const department = document.getElementById('id_department');
+  const role = document.getElementById('id_role');
+  const approver = document.getElementById('id_designated_approver');
+  const output = document.getElementById('approver-preview');
+  let generation = 0;
+  async function update() {
+    const current = ++generation;
+    if (approver.value) {
+      output.textContent = '직접 지정: ' + approver.selectedOptions[0].textContent;
+      return;
+    }
+    try {
+      const query = new URLSearchParams({department: department.value, role: role.value});
+      const response = await fetch("{% url 'approver_preview' member_preview_id %}?" + query);
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      if (current === generation) {
+        output.textContent = data.label;
+        approver.options[0].textContent = data.label;
+      }
+    } catch (_) {
+      if (current === generation) output.textContent = '자동 승인자는 저장 시 다시 확인합니다.';
+    }
+  }
+  [department, role, approver].forEach(field => field.addEventListener('change', update));
+  update();
+})();
+</script>
+{% endif %}
 {% endblock %}

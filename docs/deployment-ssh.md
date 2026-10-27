@@ -78,7 +78,19 @@ python3 scripts/deploy_nas.py --host oms-nas \
 기본 이미지 태그는 UTC 시각과 무작위 suffix로 생성한다. `--image`로 지정할 때도 새 태그를 사용하며
 운영 중이거나 이전에 배포한 태그를 덮어쓰지 않는다. `latest`는 허용하지 않는다.
 처음 Teams worker를 활성화하려면 NAS `.env`의 Teams 설정과 `TEAMS_ENABLED=1`을 준비한 뒤 `--teams`를 추가한다.
-이미 실행 중인 worker는 일반 업데이트에서도 함께 중지·교체·재시작한다.
+휴일 자동 동기화를 처음 활성화하려면 NAS `.env`에 `HOLIDAY_TENANT_ID`, `HOLIDAY_CLIENT_ID`,
+`HOLIDAY_CLIENT_SECRET`, `HOLIDAY_MAILBOX`, `HOLIDAY_CALENDAR_ID`를 설정한 뒤 `--holidays`를 추가한다.
+필수 설정과 테넌트 UUID 형식은 기존 서비스를 중지하기 전에 검사한다. 실제 Graph 권한·연결은
+[휴일 동기화 문서](holiday-sync.md)에 따라 검증한다.
+
+```sh
+python3 scripts/deploy_nas.py --host oms-nas --password --holidays
+# Teams도 처음 활성화한다면 --teams --holidays를 함께 지정한다.
+```
+
+실행 중인 Teams·휴일 worker는 옵션을 생략한 일반 업데이트에서도 함께 중지·교체·재시작한다.
+휴일 worker는 서울 시간 매일 03시 이후 실행하며 실패 시 5분 후 재시도한다.
+비활성 worker를 새로 시작하려면 해당 옵션을 명시한다.
 
 ## 수행 순서와 산출물
 
