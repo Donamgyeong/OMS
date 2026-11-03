@@ -1,18 +1,70 @@
 from django import forms
+from django.utils import timezone
 from .models import ApprovalSettings, Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord
 from .services import PLAN_FIELDS, RECORD_FIELDS
 
 
-class PlanForm(forms.ModelForm):
+class SectionedForm:
+    @property
+    def sections(self):
+        layouts = {
+            "PlanForm": [("근무 일정", ("work_date", "end_date", "start_time", "end_time", "break_minutes")),
+                         ("업무 내용", ("title", "reason"))],
+            "RecordForm": [("출퇴근 · 휴게", ("work_date", "started_at", "ended_at", "break_minutes")),
+                           ("업무 · 연결 계획", ("plan", "description", "exception_reason", "change_reason"))],
+            "MemberForm": [("기본 정보", ("first_name", "last_name", "email", "employee_number")),
+                           ("소속 · 결재", ("department", "role", "designated_approver")),
+                           ("근무 기준 · 상태", ("daily_work_minutes", "working_weekdays", "is_active", "onboarding_completed"))],
+        }
+        groups = layouts.get(type(self).__name__, [("상세 정보", tuple(self.fields))])
+        return [(title, [self[name] for name in names if name in self.fields and not self[name].is_hidden])
+                for title, names in groups]
+
+
+class AttendanceWidget(forms.SplitDateTimeWidget):
+    def __init__(self):
+        super().__init__(date_format="%Y-%m-%d", time_format="%H:%M",
+            date_attrs={"type": "date", "aria-label": "날짜"},
+            time_attrs={"type": "time", "step": "60", "aria-label": "시간"})
+
+    def decompress(self, value):
+        if isinstance(value, str):
+            from django.utils.dateparse import parse_datetime
+            try:
+                parsed = parse_datetime(value)
+            except ValueError:
+                parsed = None
+            if parsed is None:
+                return [value, None]
+            value = parsed
+        return super().decompress(value)
+
+    def value_from_datadict(self, data, files, name):
+        # Keep existing integrations posting one datetime value compatible.
+        if name in data and name + "_0" not in data and name + "_1" not in data:
+            return data.get(name)
+        return super().value_from_datadict(data, files, name)
+
+
+class AttendanceField(forms.SplitDateTimeField):
+    widget = AttendanceWidget
+
+    def clean(self, value):
+        if isinstance(value, str):
+            return forms.DateTimeField(input_formats=["%Y-%m-%dT%H:%M"]).clean(value)
+        return super().clean(value)
+
+
+class PlanForm(SectionedForm, forms.ModelForm):
     version = forms.IntegerField(widget=forms.HiddenInput, required=False)
 
     class Meta:
         model = OvertimePlan
         fields = PLAN_FIELDS
-        widgets = {"work_date": forms.DateInput(attrs={"type": "date"}),
-            "end_date": forms.DateInput(attrs={"type": "date"}),
-            "start_time": forms.TimeInput(attrs={"type": "time"}),
-            "end_time": forms.TimeInput(attrs={"type": "time"}),
+        widgets = {"work_date": forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
+            "end_date": forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
+            "start_time": forms.TimeInput(format="%H:%M", attrs={"type": "time", "step": "60"}),
+            "end_time": forms.TimeInput(format="%H:%M", attrs={"type": "time", "step": "60"}),
             "reason": forms.Textarea(attrs={"rows": 4})}
         help_texts = {"end_date": "당일 근무는 비워 두세요. 야간·월 경계는 종료일을 지정하세요.",
             "break_minutes": "월별 계산 시 휴게는 근무 구간의 끝에서 차감합니다."}
@@ -21,18 +73,20 @@ class PlanForm(forms.ModelForm):
         super().__init__(*args, **kwargs)
         if self.instance.pk:
             self.fields["version"].initial = self.instance.version
+        elif not self.is_bound:
+            self.initial.setdefault("work_date", timezone.localdate())
 
 
-class RecordForm(forms.ModelForm):
+class RecordForm(SectionedForm, forms.ModelForm):
+    started_at = AttendanceField(label="출근", input_date_formats=["%Y-%m-%d"], input_time_formats=["%H:%M"])
+    ended_at = AttendanceField(label="퇴근", input_date_formats=["%Y-%m-%d"], input_time_formats=["%H:%M"])
     version = forms.IntegerField(widget=forms.HiddenInput, required=False)
     change_reason = forms.CharField(label="수정 사유", required=False, widget=forms.Textarea(attrs={"rows": 2}))
 
     class Meta:
         model = WorkRecord
         fields = RECORD_FIELDS
-        widgets = {"work_date": forms.DateInput(attrs={"type": "date"}),
-            "started_at": forms.DateTimeInput(format="%Y-%m-%dT%H:%M", attrs={"type": "datetime-local"}),
-            "ended_at": forms.DateTimeInput(format="%Y-%m-%dT%H:%M", attrs={"type": "datetime-local"}),
+        widgets = {"work_date": forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"}),
             "description": forms.Textarea(attrs={"rows": 3}),
             "exception_reason": forms.Textarea(attrs={"rows": 2})}
 
@@ -41,8 +95,15 @@ class RecordForm(forms.ModelForm):
         self.instance.user = user
         self.instance.overtime_minutes = 0  # Calculated by the service after form validation.
         self.fields["plan"].queryset = OvertimePlan.objects.filter(user=user)
-        self.fields["started_at"].input_formats = ["%Y-%m-%dT%H:%M"]
-        self.fields["ended_at"].input_formats = ["%Y-%m-%dT%H:%M"]
+        for name, label in (("started_at", "출근"), ("ended_at", "퇴근")):
+            widgets = self.fields[name].widget.widgets
+            widgets[0].attrs["aria-label"] = label + " 날짜"
+            widgets[1].attrs["aria-label"] = label + " 시간"
+        if not self.instance.pk and not self.is_bound:
+            today = timezone.localdate()
+            self.initial.setdefault("work_date", today)
+            self.initial.setdefault("started_at", [today, None])
+            self.initial.setdefault("ended_at", [today, None])
         if self.instance.pk:
             self.fields["version"].initial = self.instance.version
             self.fields["change_reason"].required = True
@@ -54,7 +115,7 @@ class DecisionForm(forms.Form):
     comment = forms.CharField(label="결재 의견 / 반려 사유", required=False, max_length=4000, widget=forms.Textarea(attrs={"rows": 3}))
 
 
-class MemberForm(forms.ModelForm):
+class MemberForm(SectionedForm, forms.ModelForm):
     class Meta:
         model = User
         fields = ("first_name", "last_name", "email", "employee_number", "department", "role",
@@ -80,20 +141,20 @@ class MemberForm(forms.ModelForm):
                 field.help_text += " " + " ".join(exc.messages)
 
 
-class DepartmentForm(forms.ModelForm):
+class DepartmentForm(SectionedForm, forms.ModelForm):
     class Meta:
         model = Department
         fields = ("name", "parent", "head", "active")
 
 
-class PolicyForm(forms.ModelForm):
+class PolicyForm(SectionedForm, forms.ModelForm):
     class Meta:
         model = OvertimePolicy
         fields = ("effective_from", "threshold_minutes")
-        widgets = {"effective_from": forms.DateInput(attrs={"type": "date"})}
+        widgets = {"effective_from": forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"})}
 
 
-class HolidayForm(forms.ModelForm):
+class HolidayForm(SectionedForm, forms.ModelForm):
     def save(self, commit=True):
         self.instance.is_manual = True
         return super().save(commit=commit)
@@ -101,10 +162,10 @@ class HolidayForm(forms.ModelForm):
     class Meta:
         model = Holiday
         fields = ("date", "name")
-        widgets = {"date": forms.DateInput(attrs={"type": "date"})}
+        widgets = {"date": forms.DateInput(format="%Y-%m-%d", attrs={"type": "date"})}
 
 
-class ApprovalSettingsForm(forms.ModelForm):
+class ApprovalSettingsForm(SectionedForm, forms.ModelForm):
     class Meta:
         model = ApprovalSettings
         fields = ('default_administrator',)

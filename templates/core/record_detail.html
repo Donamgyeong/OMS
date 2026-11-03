@@ -5,4 +5,5 @@
 <div class="prose">{{ record.description|linebreaks }}{{ record.exception_reason|linebreaks }}</div>
 {% for day,value in record.daily_minutes.items %}<p>{{ day }}: 실제 {{ value.worked|duration }} · 소정 {{ value.standard|duration }} · 초과 {{ value.overtime|duration }}</p>{% endfor %}
 {% if record.user_id == user.pk %}<a href="{% url 'record_edit' record.pk %}">실적 수정</a>{% endif %}
-<h2>등록 · 수정 이력</h2>{% for item in events %}<details><summary>{{ item.created_at }} · {{ item.actor }} · {{ item.reason }}</summary><div class="table-wrap"><table><thead><tr><th>항목</th><th>변경 전</th><th>변경 후</th></tr></thead><tbody>{% for change in item.changes %}<tr><td>{{ change.label }}</td><td class="wrap">{{ change.before }}</td><td class="wrap">{{ change.after }}</td></tr>{% endfor %}</tbody></table></div></details>{% endfor %}{% endblock %}
+<section class="content-section"><h2>등록 · 수정 이력</h2>{% for item in events %}<details><summary>{{ item.created_at }} · {{ item.actor }} · {{ item.reason }}</summary><div class="table-wrap"><table><thead><tr><th>항목</th><th>변경 전</th><th>변경 후</th></tr></thead><tbody>{% for change in item.changes %}<tr><td>{{ change.label }}</td><td class="wrap">{{ change.before }}</td><td class="wrap">{{ change.after }}</td></tr>{% endfor %}</tbody></table></div></details>{% endfor %}</section>
+{% endblock %}
