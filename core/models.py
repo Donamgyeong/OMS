@@ -16,6 +16,9 @@ class Department(models.Model):
 
     def clean(self):
         super().clean()
+        self.name = self.name.strip()
+        if not self.name:
+            raise ValidationError({"name": "부서명을 입력하세요."})
         visited = {self.pk} if self.pk else set()
         node = self.parent
         while node:
@@ -23,8 +26,10 @@ class Department(models.Model):
                 raise ValidationError("부서의 상하위 관계가 순환할 수 없습니다.")
             visited.add(node.pk)
             node = node.parent
-        if self.head_id and (not self.head.is_active or self.head.department_id != self.pk):
-            raise ValidationError("부서장은 해당 부서의 활성 사용자여야 합니다.")
+        if self.active and self.parent_id and not self.parent.active:
+            raise ValidationError({"parent": "활성 상위 부서를 선택하세요."})
+        from .organization import validate_department
+        validate_department(self)
 
 
 class User(AbstractUser):
@@ -51,11 +56,24 @@ class User(AbstractUser):
 
     def clean(self):
         super().clean()
+        self.employee_number = (self.employee_number or "").strip() or None
+        self.working_weekdays = ",".join(part.strip() for part in self.working_weekdays.split(",")) if self.working_weekdays else ""
+        if self.daily_work_minutes is not None and not 0 < self.daily_work_minutes <= 1440:
+            raise ValidationError({"daily_work_minutes": "일 소정근무는 1~1440분으로 입력하세요."})
+        if self.designated_approver_id and (not self.designated_approver.is_active or
+                (self.designated_approver.department_id and not self.designated_approver.department.active)):
+            raise ValidationError({"designated_approver": "활성 부서의 활성 승인자를 선택하세요."})
         if self.designated_approver_id and self.designated_approver_id == self.pk and not self.is_superuser:
             raise ValidationError("본인을 지정 승인자로 설정할 수 없습니다.")
         if not self.working_weekdays or any(day not in "0123456" or len(day) != 1 for day in self.working_weekdays.split(",")):
             raise ValidationError("근무 요일은 0~6을 쉼표로 구분하세요.")
-        if self.onboarding_completed and not (self.is_superuser or self.role == self.Role.ADMIN):
+        if len(self.working_weekdays.split(",")) != len(set(self.working_weekdays.split(","))):
+            raise ValidationError({"working_weekdays": "근무 요일을 중복 입력할 수 없습니다."})
+        if self.is_active and self.department_id and not self.department.active:
+            raise ValidationError({"department": "활성 사용자는 활성 부서에 배정하세요."})
+        from .organization import validate_member
+        validate_member(self)
+        if self.is_active and self.onboarding_completed and not (self.is_superuser or self.role == self.Role.ADMIN):
             if not self.employee_number or not self.department_id or not self.department.active:
                 raise ValidationError("업무 설정 완료 전 사번과 활성 부서를 지정하세요.")
             from .services import resolve_approver
@@ -299,3 +317,27 @@ class HolidaySyncState(models.Model):
     last_error = models.CharField(max_length=200, blank=True)
     count = models.PositiveIntegerField(default=0)
     changed_dates = models.JSONField(default=list, blank=True)
+
+
+class ReportAllowance(models.Model):
+    effective_month = models.DateField('적용 시작 월', unique=True)
+    included_minutes = models.PositiveIntegerField('월 포함 초과 근무(분)', default=960)
+
+    class Meta:
+        ordering = ['-effective_month']
+
+    def clean(self):
+        if self.effective_month and self.effective_month.day != 1:
+            raise ValidationError({'effective_month': '적용 월의 1일을 입력하세요.'})
+        if self.included_minutes is not None and self.included_minutes > 44640:
+            raise ValidationError({'included_minutes': '0~44640분으로 입력하세요.'})
+
+    def __str__(self):
+        return f'{self.effective_month:%Y-%m}: {self.included_minutes}분'
+
+
+class ReportDownload(models.Model):
+    user = models.ForeignKey(User, on_delete=models.PROTECT)
+    created_at = models.DateTimeField(auto_now_add=True)
+    filters = models.JSONField(default=dict)
+    row_count = models.PositiveIntegerField()

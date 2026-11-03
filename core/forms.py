@@ -1,6 +1,7 @@
 from django import forms
 from django.utils import timezone
-from .models import ApprovalSettings, Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord
+from django.db.models import Q
+from .models import ReportAllowance, ApprovalSettings, Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord
 from .services import PLAN_FIELDS, RECORD_FIELDS
 
 
@@ -115,7 +116,20 @@ class DecisionForm(forms.Form):
     comment = forms.CharField(label="결재 의견 / 반려 사유", required=False, max_length=4000, widget=forms.Textarea(attrs={"rows": 3}))
 
 
-class MemberForm(SectionedForm, forms.ModelForm):
+class OrganizationFormMixin:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .organization import revision
+        self.fields["organization_revision"].initial = revision(self.instance)
+
+
+class MemberForm(OrganizationFormMixin, SectionedForm, forms.ModelForm):
+    organization_revision = forms.CharField(required=False, widget=forms.HiddenInput)
+
+    def save_organization(self, actor):
+        from .organization import save_member
+        return save_member(actor, self.save(commit=False), expected_revision=self.cleaned_data.get("organization_revision"))
+
     class Meta:
         model = User
         fields = ("first_name", "last_name", "email", "employee_number", "department", "role",
@@ -123,6 +137,8 @@ class MemberForm(SectionedForm, forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.fields["department"].queryset = Department.objects.filter(Q(active=True) | Q(pk=self.instance.department_id))
+        self.fields["role"].help_text = "부서장으로 저장하면 소속 부서의 부서장에 자동 반영됩니다. 기존 부서장이 있으면 부서 정보에서 교체하세요."
         field = self.fields["designated_approver"]
         field.queryset = User.objects.filter(is_active=True)
         if not self.instance.is_superuser:
@@ -141,10 +157,24 @@ class MemberForm(SectionedForm, forms.ModelForm):
                 field.help_text += " " + " ".join(exc.messages)
 
 
-class DepartmentForm(SectionedForm, forms.ModelForm):
+class DepartmentForm(OrganizationFormMixin, SectionedForm, forms.ModelForm):
+    organization_revision = forms.CharField(required=False, widget=forms.HiddenInput)
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["head"].queryset = User.objects.filter(is_active=True, department_id=self.instance.pk) if self.instance.pk else User.objects.none()
+        self.fields["head"].help_text = "해당 부서의 활성 사용자만 선택합니다. 새 부서장은 부서장 역할로, 이전 부서장은 일반 사용자로 변경됩니다."
+        self.fields["parent"].queryset = Department.objects.filter(Q(active=True) | Q(pk=self.instance.parent_id)).exclude(pk=self.instance.pk)
+        self.fields["parent"].error_messages["invalid_choice"] = "순환하지 않는 활성 상위 부서를 선택하세요."
+
+    def save_organization(self, actor):
+        from .organization import save_department
+        return save_department(actor, self.save(commit=False), expected_revision=self.cleaned_data.get("organization_revision"))
+
     class Meta:
         model = Department
         fields = ("name", "parent", "head", "active")
+        labels = {"parent": "상위 부서", "head": "부서장"}
 
 
 class PolicyForm(SectionedForm, forms.ModelForm):
@@ -169,3 +199,39 @@ class ApprovalSettingsForm(SectionedForm, forms.ModelForm):
     class Meta:
         model = ApprovalSettings
         fields = ('default_administrator',)
+
+
+class ReportAllowanceForm(SectionedForm, forms.ModelForm):
+    class Meta:
+        model = ReportAllowance
+        fields = ('effective_month', 'included_minutes')
+        widgets = {'effective_month': forms.DateInput(format='%Y-%m-%d', attrs={'type': 'date'})}
+        help_texts = {'effective_month': '적용 월의 1일을 입력하세요. 승인 기준과 별도로 관리합니다.'}
+
+
+class MonthlyReportForm(forms.Form):
+    start_month = forms.DateField(label='시작 월', input_formats=['%Y-%m'], widget=forms.DateInput(format='%Y-%m', attrs={'type': 'month'}))
+    end_month = forms.DateField(label='종료 월', input_formats=['%Y-%m'], widget=forms.DateInput(format='%Y-%m', attrs={'type': 'month'}))
+    department = forms.ModelChoiceField(label='부서', queryset=Department.objects.none(), required=False, empty_label='전체')
+    member = forms.ModelChoiceField(label='사용자', queryset=User.objects.none(), required=False, empty_label='전체')
+
+    def __init__(self, *args, user, **kwargs):
+        super().__init__(*args, **kwargs)
+        from .selectors import visible_to
+        plans = visible_to(OvertimePlan.objects.all(), user)
+        records = visible_to(WorkRecord.objects.all(), user)
+        if user.is_superuser or user.role == User.Role.ADMIN:
+            self.fields['department'].queryset = Department.objects.all()
+            self.fields['member'].queryset = User.objects.all()
+        else:
+            self.fields['member'].queryset = User.objects.filter(Q(pk=user.pk) | Q(pk__in=plans.values('user_id')) | Q(pk__in=records.values('user_id')))
+            self.fields['department'].queryset = Department.objects.filter(Q(pk=user.department_id) | Q(pk__in=plans.values('department_id')) | Q(pk__in=records.values('department_id')))
+
+    def clean(self):
+        data = super().clean()
+        if data.get('start_month') and data.get('end_month'):
+            start, end = data['start_month'], data['end_month']
+            span = (end.year - start.year) * 12 + end.month - start.month
+            if not 0 <= span < 12 or (end.year == 9999 and end.month == 12):
+                raise forms.ValidationError('시작 월부터 최대 12개월을 선택하세요.')
+        return data

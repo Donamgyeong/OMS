@@ -5,7 +5,8 @@ from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 
-from core.models import EntraIdentity, User
+from core.models import Department, EntraIdentity, User
+from core.organization import _lock
 
 
 class Command(BaseCommand):
@@ -23,6 +24,7 @@ class Command(BaseCommand):
             object_id=options["object_id"]).first()
         if not identity:
             raise CommandError("User must first sign in with an assigned Microsoft company account.")
+        _lock()
         user = User.objects.select_for_update().get(pk=identity.user_id)
         if not user.is_active:
             raise CommandError("Cannot grant access to an inactive account.")
@@ -30,5 +32,7 @@ class Command(BaseCommand):
         if options["superuser"]:
             fields.update(is_staff=True, is_superuser=True)
         User.objects.filter(pk=user.pk).update(**fields)
+        if not (user.is_superuser or options["superuser"]):
+            Department.objects.filter(head=user).update(head=None)
         logging.getLogger("oms.authentication").info("admin_bootstrapped user_id=%s superuser=%s", user.pk, options["superuser"])
         self.stdout.write(self.style.SUCCESS(f"OMS administrator granted: user_id={user.pk}"))

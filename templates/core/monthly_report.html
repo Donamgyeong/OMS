@@ -1,0 +1,19 @@
+{% extends 'base.html' %}{% load oms %}{% block content %}
+<h1>월별 근무 집계</h1>
+<p>사용자별 월 16시간을 넘는 실제 초과 근무를 확인합니다. 월별 잔여 시간은 다음 달로 이월하지 않습니다.</p>
+<form method="get" class="filters">
+{{ form.non_field_errors }}
+{% for field in form %}<label>{{ field.label }}{{ field }}{{ field.errors }}</label>{% endfor %}
+<button>조회</button><button name="download" value="xlsx">Excel 다운로드</button>
+</form>
+{% if report %}
+<div class="cards"><section><span>집계된 사용자·월</span><strong>{{ report.rows|length }}건</strong></section><section><span>확인 가능한 월의 포함 기준 초과분 합계</span><strong>{{ report.total_extra|duration }}</strong><small>각 월 초과분을 합산합니다.</small></section><section><span>초과분 미확정</span><strong>{{ report.unconfirmed }}건</strong><small>일부 기록 조회 또는 일별 내역·기준 확인 필요</small></section></div>
+<section class="content-section"><h2>사용자별 월 집계</h2>
+<p class="helptext">모든 시간은 휴게를 제외하며, 조회 범위에서 월 배분 가능한 기록을 합산합니다. 사전 확정은 근무 시작 전에 제출한 무승인 확정·승인 완료 계획입니다. 현재 저장 상태를 기준으로 하며 수정 후 다시 조회하면 결과가 달라질 수 있습니다.</p>
+<div class="table-wrap"><table><thead><tr><th>월</th><th>사번 · 이름</th><th>기록 부서</th><th>사전 확정 계획</th><th>사전 승인 대기</th><th>사후등록 계획</th><th>실제 총 근무</th><th>실제 초과 근무</th><th>월 포함 기준</th><th>포함 기준 초과분</th><th>계획 대비 차이</th><th>검토 사항</th></tr></thead><tbody>
+{% for row in page %}<tr><td>{{ row.month }}</td><td>{{ row.employee_number }} · {{ row.name }}</td><td>{{ row.departments }}</td><td>{{ row.fixed|duration }}</td><td>{{ row.pending|duration }}</td><td>{{ row.retrospective|duration }}</td><td>{{ row.worked|duration }}</td><td>{{ row.overtime|duration }}</td><td>{{ row.allowance|duration }}</td><td>{% if row.extra != None %}<strong>{{ row.extra|duration }}</strong>{% else %}확인 필요{% endif %}</td><td>{{ row.difference|duration }}</td><td class="wrap">{{ row.warnings|default:'-' }}</td></tr>{% empty %}<tr><td colspan="12">해당 기간에 등록된 계획·실적이 없습니다.</td></tr>{% endfor %}
+</tbody></table></div>
+{% if page.has_other_pages %}<div class="toolbar">{% if page.has_previous %}<a href="?{{ filter_query }}&amp;page={{ page.previous_page_number }}">이전</a>{% endif %}<span>{{ page.number }} / {{ page.paginator.num_pages }}</span>{% if page.has_next %}<a href="?{{ filter_query }}&amp;page={{ page.next_page_number }}">다음</a>{% endif %}</div>{% endif %}
+<p class="helptext">추출 시각: {{ report.generated_at }} · Excel에는 상태별 계획, 일별 실적, 집계 기준과 검토 사항이 포함됩니다.</p>
+</section>{% endif %}
+{% endblock %}

@@ -1,6 +1,6 @@
 from django.contrib import admin
 from django.urls import path
-from core import auth_views, views
+from core import auth_views, views, report_views
 from core.teams_views import messages as teams_messages
 
 urlpatterns = [
@@ -13,6 +13,7 @@ urlpatterns = [
     path("accounts/logout/", auth_views.logout_view, name="logout"),
     path("health/", views.health, name="health"),
     path("", views.dashboard, name="dashboard"),
+    path("reports/monthly/", report_views.monthly_report, name="monthly_report"),
     path("plans/new/", views.plan_edit, name="plan_create"),
     path("plans/<int:pk>/", views.plan_detail, name="plan_detail"),
     path("plans/<int:pk>/edit/", views.plan_edit, name="plan_edit"),

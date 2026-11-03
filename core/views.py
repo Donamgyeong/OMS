@@ -8,9 +8,9 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from datetime import datetime
-from .models import ApprovalSettings, HolidaySyncState, Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord, Notification
+from .models import ReportAllowance, ApprovalSettings, HolidaySyncState, Department, Holiday, OvertimePlan, OvertimePolicy, User, WorkRecord, Notification
 from .selectors import visible_to
-from .forms import ApprovalSettingsForm, PlanForm, RecordForm, DecisionForm, DepartmentForm, HolidayForm, MemberForm, PolicyForm
+from .forms import ReportAllowanceForm, ApprovalSettingsForm, PlanForm, RecordForm, DecisionForm, DepartmentForm, HolidayForm, MemberForm, PolicyForm
 from . import services
 
 
@@ -215,7 +215,7 @@ def setup(request):
                     break
     return render(request, "core/setup.html", {"members": visible_members(request.user),
         "departments": Department.objects.select_related("head", "parent"),
-        "policies": OvertimePolicy.objects.all(), "holidays": Holiday.objects.order_by("date"),
+        "report_allowances": ReportAllowance.objects.all(), "policies": OvertimePolicy.objects.all(), "holidays": Holiday.objects.order_by("date"),
         "holiday_sync": sync_state, "holiday_affected_records": affected})
 
 
@@ -229,7 +229,7 @@ def setup_edit(request, kind, pk=None):
             raise PermissionDenied
         ApprovalSettings.objects.get_or_create(pk=1)
         pk = 1
-    configs = {"approval": (ApprovalSettings, ApprovalSettingsForm, "기본 결재 설정"), "member": (User, MemberForm, "사용자"), "department": (Department, DepartmentForm, "부서"),
+    configs = {"report_allowance": (ReportAllowance, ReportAllowanceForm, "보고용 월 포함 기준"), "approval": (ApprovalSettings, ApprovalSettingsForm, "기본 결재 설정"), "member": (User, MemberForm, "사용자"), "department": (Department, DepartmentForm, "부서"),
         "policy": (OvertimePolicy, PolicyForm, "초과 근무 정책"), "holiday": (Holiday, HolidayForm, "휴일")}
     if kind not in configs:
         raise Http404
@@ -241,21 +241,19 @@ def setup_edit(request, kind, pk=None):
     if request.method == "POST" and form.is_valid():
         from django.contrib.admin.models import LogEntry, ADDITION, CHANGE
         from django.db import transaction
-        with transaction.atomic():
-            obj = form.save(commit=False)
-            if kind == "member":
-                # Do not overwrite a concurrently incremented session revocation version.
-                obj.save(update_fields=list(form._meta.fields))
-                if "is_active" in form.changed_data:
-                    from .authentication import revoke_sessions
-                    revoke_sessions(obj.pk)
-            else:
-                obj.save()
-            LogEntry.objects.log_actions(user_id=request.user.pk, queryset=[obj],
-                action_flag=CHANGE if pk else ADDITION,
-                change_message=f"기초정보 화면: {', '.join(form.changed_data)}")
-        messages.success(request, f"{title} 정보를 저장했습니다.")
-        return redirect("setup")
+        try:
+            with transaction.atomic():
+                if kind in ("member", "department"):
+                    obj = form.save_organization(request.user)
+                else:
+                    obj = form.save()
+                    LogEntry.objects.log_actions(user_id=request.user.pk, queryset=[obj],
+                        action_flag=CHANGE if pk else ADDITION,
+                        change_message=f"기초정보 화면: {', '.join(form.changed_data)}")
+            messages.success(request, f"{title} 정보를 저장했습니다.")
+            return redirect("setup")
+        except ValidationError as exc:
+            form.add_error(None, " ".join(exc.messages))
     return render(request, "core/form.html", {"form": form, "member_preview_id": obj.pk if kind == "member" else None, "heading": f"{title} {'수정' if pk else '등록'}", "is_setup": True})
 
 

@@ -2,13 +2,23 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.contrib.auth.views import redirect_to_login
 from django.views.decorators.http import require_GET
-from .authentication import revoke_sessions
+from django.core.exceptions import ValidationError
+from django.shortcuts import redirect
+from .forms import MemberForm, DepartmentForm
+from .organization import save_member, save_department
 from .models import ApprovalEvent, Department, Holiday, Notification, OvertimePlan, OvertimePolicy, User, WorkRecord, WorkRecordEvent
 from .models import TeamsConversation, TeamsDelivery
 from django.utils import timezone
 
 
 class SuperuserOnly:
+    def changeform_view(self, request, object_id=None, form_url="", extra_context=None):
+        try:
+            return super().changeform_view(request, object_id, form_url, extra_context)
+        except ValidationError as exc:
+            self.message_user(request, " ".join(exc.messages), level="error")
+            return redirect(request.path)
+
     # Business administrator role does not grant unrestricted Django admin access.
     def has_module_permission(self, request):
         return request.user.is_superuser
@@ -28,9 +38,10 @@ class SuperuserOnly:
 
 @admin.register(User)
 class OMSUserAdmin(SuperuserOnly, UserAdmin):
+    form = MemberForm
     fieldsets = (
         ("회사 계정", {"fields": ("display_name", "first_name", "last_name", "email", "entra_reference")}),
-        ("접근 권한", {"fields": ("is_active", "is_staff", "is_superuser", "onboarding_completed")}),
+        ("접근 권한", {"fields": ("is_active", "is_staff", "is_superuser", "onboarding_completed", "organization_revision")}),
         ("조직·근무 기준", {"fields": ("employee_number", "department", "role", "designated_approver", "daily_work_minutes", "working_weekdays")}),
     )
     readonly_fields = ("display_name", "entra_reference")
@@ -54,14 +65,20 @@ class OMSUserAdmin(SuperuserOnly, UserAdmin):
         return [url for url in super().get_urls() if not (url.name or "").endswith("_password_change")]
 
     def save_model(self, request, obj, form, change):
-        obj.save(update_fields=[field.name for field in obj._meta.concrete_fields
-            if not field.primary_key and field.name != "auth_version"])
-        if "is_active" in form.changed_data:
-            revoke_sessions(obj.pk)
+        concrete = {field.name for field in obj._meta.concrete_fields if not field.primary_key}
+        saved = save_member(request.user, obj, fields=[name for name in form.fields
+            if name in concrete and name != "auth_version"], expected_revision=form.cleaned_data.get("organization_revision"))
+        obj.auth_version = saved.auth_version
 
 
 @admin.register(Department)
 class DepartmentAdmin(SuperuserOnly, admin.ModelAdmin):
+    form = DepartmentForm
+
+    def save_model(self, request, obj, form, change):
+        saved = save_department(request.user, obj, expected_revision=form.cleaned_data.get("organization_revision"))
+        obj.pk = saved.pk
+
     list_display = ("name", "parent", "head", "active")
 
 
@@ -181,3 +198,18 @@ def no_password_change(request, *args, **kwargs):
 
 admin.site.password_change = no_password_change
 admin.site.password_change_done = no_password_change
+
+
+from .models import ReportDownload
+
+
+@admin.register(ReportDownload)
+class ReportDownloadAdmin(SuperuserOnly, admin.ModelAdmin):
+    list_display = ('created_at', 'user', 'row_count')
+    readonly_fields = ('created_at', 'user', 'filters', 'row_count')
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False

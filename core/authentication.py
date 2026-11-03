@@ -90,7 +90,13 @@ def user_from_claims(claims):
     return user
 
 
+@transaction.atomic
 def revoke_sessions(user_id, *, deactivate=False):
+    if deactivate:
+        from .organization import _lock
+        from .models import Department
+        _lock()
+        Department.objects.filter(head_id=user_id).update(head=None)
     updates = {"auth_version": F("auth_version") + 1}
     if deactivate:
         updates["is_active"] = False
