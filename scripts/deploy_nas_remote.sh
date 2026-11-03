@@ -61,7 +61,7 @@ d() {
 }
 c() {
     d compose --project-directory "$target" --env-file "$target/.env" \
-        -p "$project" -f "$release/compose.cloudflare.yaml" --profile teams --profile holidays "$@"
+        -p "$project" -f "$release/compose.cloudflare.yaml" -f "$release/compose.release.yaml" --profile teams --profile holidays "$@"
 }
 cd "$release"
 step archive-checksum
@@ -81,13 +81,25 @@ actual_platform=$(d image inspect "$APP_IMAGE" --format '{{.Os}}/{{.Architecture
 test "$actual_platform" = linux/arm64 || {
     echo "Expected linux/arm64, got $actual_platform" >&2; exit 1;
 }
+# Pin application image names in Compose itself: sudo env_reset can remove APP_IMAGE.
+# Leave the live .env unchanged until all startup and image checks pass.
+step compose-release-override
+cat > "$release/compose.release.yaml" <<EOF
+services:
+  app:
+    image: "$APP_IMAGE"
+  teams-worker:
+    image: "$APP_IMAGE"
+  holiday-worker:
+    image: "$APP_IMAGE"
+EOF
 cd "$target"
 step compose-config
 c config --quiet
 # Resolve Compose's secret path without sourcing .env as shell code or printing values.
-step tunnel-secret-path
+step compose-image-and-tunnel-secret-path
 token=$(c config --format json | d run --rm -i --network none --entrypoint python "$APP_IMAGE" \
-    -c 'import json,sys; print(json.load(sys.stdin)["secrets"]["cloudflared_token"]["file"])')
+    -c 'import json,sys; data=json.load(sys.stdin); expected=sys.argv[1]; assert all(data["services"][name]["image"] == expected for name in ("app", "teams-worker", "holiday-worker")), "Compose application image does not match requested release"; print(data["secrets"]["cloudflared_token"]["file"])' "$APP_IMAGE")
 step tunnel-secret-file
 test -s "$token" || { echo "Cloudflare token file is missing or empty: $token" >&2; exit 1; }
 # Pin the resolved path, including when an old connector has a stale bind mount.
@@ -140,15 +152,34 @@ step migration
 migration_started=1
 c run --rm --no-deps app python manage.py migrate --noinput
 step app-startup
-c up -d --wait --wait-timeout 180 app
-if [ "$teams" = 1 ]; then c up -d teams-worker; fi
+c up -d --force-recreate --pull never --wait --wait-timeout 180 app
+if [ "$teams" = 1 ]; then c up -d --force-recreate --pull never teams-worker; fi
 if [ "$holidays" = 1 ]; then
     step holiday-worker-startup
-    c up -d --wait --wait-timeout 180 holiday-worker
+    c up -d --force-recreate --pull never --wait --wait-timeout 180 holiday-worker
 fi
 step tunnel-startup
 c up -d --force-recreate --no-deps --wait --wait-timeout 180 cloudflared
 c exec -T cloudflared cloudflared tunnel --metrics 127.0.0.1:2000 ready
+verify_running_image() {
+    service=$1
+    containers=$(c ps --status running -q "$service")
+    test -n "$containers" || { echo "No running container for $service" >&2; exit 1; }
+    for container in $containers; do
+        running_id=$(d inspect --format '{{.Image}}' "$container")
+        running_ref=$(d inspect --format '{{.Config.Image}}' "$container")
+        if { [ "$running_id" != "$actual_id" ] && [ "$running_id" != "$config_id" ]; } || [ "$running_ref" != "$APP_IMAGE" ]; then
+            printf 'Running image mismatch for %s: image=%s id=%s expected=%s (%s or %s)\n' \
+                "$service" "$running_ref" "$running_id" "$APP_IMAGE" "$actual_id" "$config_id" >&2
+            exit 1
+        fi
+        printf 'Verified %s: %s (%s)\n' "$service" "$running_ref" "$running_id"
+    done
+}
+step running-image-identity
+verify_running_image app
+if [ "$teams" = 1 ]; then verify_running_image teams-worker; fi
+if [ "$holidays" = 1 ]; then verify_running_image holiday-worker; fi
 step save-configuration
 # Keep the NAS secrets and only replace the release image tag. Publish after health checks.
 awk -v image="$APP_IMAGE" '

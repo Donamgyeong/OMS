@@ -113,6 +113,14 @@ python3 scripts/deploy_nas.py --host oms-nas --password --holidays
 중요 배포 전 기존 검증 절차를 실행하고, 배포 후 외부 네트워크에서 로그인·권한·로그아웃을 확인한다.
 오래된 이미지·전송 파일·백업은 자동 삭제하지 않는다.
 
+## 배포 이미지가 한 버전 늦어지던 문제
+
+기존 스크립트는 새 태그를 `export APP_IMAGE`로 전달하고, 서비스가 정상 기동한 뒤 `.env`의 `APP_IMAGE`를 갱신했다. 기본 실행 경로인 `sudo docker compose`에서 sudo의 `env_reset`이 이 변수를 제거하면 Compose가 `.env`의 이전 태그를 사용했다. 전송한 이미지는 새 이미지여도 마이그레이션과 앱은 이전 이미지로 실행되고 마지막에 `.env`만 새 태그로 바뀌므로, 다음 배포도 한 버전씩 늦어지는 현상이 발생할 수 있었다.
+
+현재는 체크섬·이미지 검증 후 릴리스 폴더에 `compose.release.yaml`을 생성해 app·Teams worker·휴일 worker의 이미지 태그를 문자 그대로 고정한다. sudo 환경 보존 설정이나 `.env` 조기 변경에 의존하지 않는다. Compose의 최종 이미지 설정을 사전 검사하고, 앱·워커를 `--force-recreate --pull never`로 교체한다. 기동 후 컨테이너의 실제 이미지 ID와 이미지 태그가 전송한 릴리스와 일치해야 `.env` 및 운영 Compose를 갱신하고 배포 성공을 표시한다. 로그의 `Verified app: ...`에서 실제 확인한 태그와 ID를 볼 수 있다.
+
+`--skip-build --image <이전 태그>`를 사용하면 지정한 기존 이미지를 다시 배포한다. 최신 소스 변경을 배포할 때는 두 옵션을 생략한다. 이 옵션의 의도된 동작은 위 sudo 문제와 별개다.
+
 ## 실패 시
 
 `bind source path does not exist`가 이전 배포 폴더의 `secrets/cloudflared-token`을 가리키면 NAS `.env`의

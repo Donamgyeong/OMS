@@ -136,3 +136,17 @@ class HolidayTests(TestCase):
         fetch.return_value = []
         sync_holidays()
         self.assertEqual(Holiday.objects.count(), 0)
+
+
+    @override_settings(HOLIDAY_TENANT_ID='', HOLIDAY_CLIENT_ID='configured-client',
+        HOLIDAY_CLIENT_SECRET='private-secret-value', HOLIDAY_MAILBOX='', HOLIDAY_CALENDAR_ID='calendar')
+    @patch('core.holidays.request_json')
+    def test_missing_configuration_lists_only_names_without_network_or_secrets(self, request):
+        from .holidays import fetch_events
+        with self.assertRaises(SyncError) as error:
+            fetch_events(date(2026,1,1), date(2027,1,1))
+        self.assertIn('HOLIDAY_TENANT_ID', str(error.exception))
+        self.assertIn('HOLIDAY_MAILBOX', str(error.exception))
+        self.assertNotIn('private-secret-value', str(error.exception))
+        self.assertNotIn('configured-client', str(error.exception))
+        request.assert_not_called()

@@ -40,10 +40,11 @@ def request_json(method, url, **kwargs):
 
 
 def fetch_events(start, end):
-    values = [getattr(settings, 'HOLIDAY_' + key) for key in
-              ('TENANT_ID', 'CLIENT_ID', 'CLIENT_SECRET', 'MAILBOX', 'CALENDAR_ID')]
-    if not all(values):
-        raise SyncError("휴일 캘린더 연결 설정이 필요합니다.")
+    keys = ['HOLIDAY_' + key for key in ('TENANT_ID', 'CLIENT_ID', 'CLIENT_SECRET', 'MAILBOX', 'CALENDAR_ID')]
+    values = [getattr(settings, key) for key in keys]
+    missing = [key for key, value in zip(keys, values) if not value]
+    if missing:
+        raise SyncError("휴일 캘린더 연결 설정이 필요합니다. 누락: " + ", ".join(missing))
     tenant, client, secret, mailbox, calendar = values
     try:
         UUID(tenant)

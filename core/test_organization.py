@@ -258,3 +258,36 @@ class OrganizationTests(WorkflowFixture, TestCase):
         self.manager.refresh_from_db()
         self.assertEqual(self.manager.role, 'admin')
         self.assertIsNone(self.department.head)
+
+    def test_setup_department_save_synchronizes_completed_members_with_revision(self):
+        User.objects.filter(pk__in=[self.employee.pk, self.manager.pk]).update(onboarding_completed=True)
+        self.client.force_login(self.admin)
+        path = reverse('setup_edit', args=['department', self.department.pk])
+        form = self.client.get(path).context['form']
+        response = self.client.post(path, dict(name=self.department.name, parent='',
+            head=self.employee.pk, active='on', organization_revision=form['organization_revision'].value()), follow=True)
+        self.assertEqual(response.redirect_chain, [(reverse('setup'), 302)])
+        self.assertContains(response, '정보를 저장했습니다')
+        self.department.refresh_from_db()
+        self.employee.refresh_from_db()
+        self.manager.refresh_from_db()
+        self.assertEqual(self.department.head_id, self.employee.pk)
+        self.assertEqual(self.employee.role, User.Role.MANAGER)
+        self.assertEqual(self.manager.role, User.Role.EMPLOYEE)
+
+    def test_setup_member_save_synchronizes_completed_member_with_revision(self):
+        # An actual completed employee has an approver before promotion.
+        self.outsider.onboarding_completed = True
+        self.outsider.designated_approver = self.manager
+        self.outsider.save()
+        self.client.force_login(self.admin)
+        path = reverse('setup_edit', args=['member', self.outsider.pk])
+        form = self.client.get(path).context['form']
+        response = self.client.post(path, self.member_data(self.outsider, role='manager',
+            organization_revision=form['organization_revision'].value()), follow=True)
+        self.assertEqual(response.redirect_chain, [(reverse('setup'), 302)])
+        self.assertContains(response, '정보를 저장했습니다')
+        self.other_department.refresh_from_db()
+        self.outsider.refresh_from_db()
+        self.assertEqual(self.other_department.head_id, self.outsider.pk)
+        self.assertEqual(self.outsider.role, User.Role.MANAGER)

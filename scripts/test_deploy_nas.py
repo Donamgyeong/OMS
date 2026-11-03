@@ -14,21 +14,44 @@ from deploy_nas import archive_config_id, deploy, main, parse_args, preflight_sc
 
 REMOTE = Path(__file__).with_name('deploy_nas_remote.sh')
 FAKE_DOCKER = r'''#!/usr/bin/env python3
-import json, os, sys
+import json, os, re, sys
 a = sys.argv[1:]
 with open(os.environ['DEPLOY_TEST_LOG'], 'a') as f: f.write(json.dumps(a)+'\n')
 if a[0] == 'image':
     print('linux/arm64' if 'Architecture' in a[-1] else os.environ.get('DEPLOY_TEST_IMAGE_ID', 'sha256:fixture'))
+elif a[0] == 'inspect':
+    if 'Config.Image' in a[2]: print('oms:old' if os.environ.get('DEPLOY_TEST_FAIL') == 'running-image' else 'oms:new')
+    else: print('sha256:old' if os.environ.get('DEPLOY_TEST_FAIL') == 'running-image' else os.environ.get('DEPLOY_TEST_IMAGE_ID', 'sha256:fixture'))
 elif a[0] == 'run':
     if '--mount' in a:
         if os.environ.get('DEPLOY_TEST_FAIL') == 'token-mount': sys.exit(15)
     elif 'python' in a:
-        print(json.load(sys.stdin)['secrets']['cloudflared_token']['file'])
+        index = a.index('-c') + 1
+        sys.argv = a[index:]
+        exec(a[index])
     else: print('media-backup')
 elif a[0] == 'compose':
     action = next(x for x in a if x in ('config','run','up','stop','exec','ps'))
+    env_path = a[a.index('--env-file')+1]
+    env_values = dict(line.split('=',1) for line in open(env_path).read().splitlines() if '=' in line)
+    resolved_image = os.environ.get('APP_IMAGE', env_values.get('APP_IMAGE', 'oms:local'))
+    for index, value in enumerate(a):
+        if value == '-f':
+            content = open(a[index+1]).read()
+            pinned = re.search(r'    image: "([^"]+)"', content)
+            if pinned: resolved_image = pinned.group(1)
+    with open(os.environ['DEPLOY_TEST_LOG'], 'a') as f:
+        f.write(json.dumps(['compose-image', 'phase:'+action, resolved_image])+'\n')
+    state_file = os.environ['DEPLOY_TEST_LOG'] + '.state'
+    state = json.load(open(state_file)) if os.path.exists(state_file) else {}
+    if action == 'up':
+        for service in ('app', 'teams-worker', 'holiday-worker'):
+            if service in a: state[service] = True
+        with open(state_file, 'w') as stream: json.dump(state, stream)
     if action == 'config' and '--format' in a:
-        print(json.dumps({'secrets':{'cloudflared_token':{'file':os.environ['DEPLOY_TEST_TOKEN']}}}))
+        if os.environ.get('DEPLOY_TEST_FAIL') == 'compose-image': resolved_image = 'oms:old'
+        print(json.dumps({'services': {name: {'image': resolved_image} for name in ('app','teams-worker','holiday-worker')},
+            'secrets':{'cloudflared_token':{'file':os.environ['DEPLOY_TEST_TOKEN']}}}))
     elif action == 'run' and 'check' in a and os.environ.get('DEPLOY_TEST_FAIL') == 'preflight':
         sys.exit(11)
     elif action == 'run' and any('HOLIDAY_TENANT_ID' in x for x in a) and os.environ.get('DEPLOY_TEST_FAIL') == 'holiday-settings':
@@ -45,13 +68,20 @@ elif a[0] == 'compose':
     elif action == 'up' and 'app' in a and os.environ.get('DEPLOY_TEST_FAIL') == 'startup':
         sys.exit(14)
     elif action == 'ps' and 'app' in a: print('old-app-id')
+    elif action == 'ps':
+        for service in ('teams-worker', 'holiday-worker'):
+            if service in a and state.get(service): print(service+'-id')
 '''
 FAKE_SUDO = r'''#!/usr/bin/env python3
 import json, os, sys
 with open(os.environ['DEPLOY_TEST_LOG'], 'a') as f: f.write(json.dumps(['sudo']+sys.argv[1:])+'\n')
 if sys.argv[1:] == ['-v']: sys.exit(0)
 assert sys.argv[1] == '-n' and os.path.basename(sys.argv[2]) == 'docker'
-os.execv(sys.argv[2], [sys.argv[2]]+sys.argv[3:])
+environment = dict(os.environ)
+# sudo's usual env_reset drops arbitrary deployment variables.
+environment.pop('APP_IMAGE', None)
+environment.pop('CLOUDFLARE_TUNNEL_TOKEN_FILE', None)
+os.execve(sys.argv[2], [sys.argv[2]]+sys.argv[3:], environment)
 '''
 
 
@@ -176,6 +206,36 @@ class RemoteDeploymentTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertNotIn('//backups/', result.stdout + result.stderr)
         self.assertTrue((self.target / 'backups/test-release/database.dump').is_file())
+
+    def test_sudo_compose_uses_requested_image_before_env_is_published(self):
+        result = self.deploy(docker_mode='sudo')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        resolved = [entry for entry in self.calls() if entry[0] == 'compose-image']
+        self.assertTrue(resolved)
+        self.assertTrue(all(entry[2] == 'oms:new' for entry in resolved), resolved)
+
+    def test_rendered_wrong_compose_image_fails_before_stopping_writers(self):
+        result = self.deploy('compose-image', docker_mode='sudo')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(any('stop' in entry for entry in self.calls()))
+        self.assertEqual((self.target / '.env').read_text(), self.old_env)
+        self.assertIn('does not match requested release', result.stderr)
+
+    def test_stale_running_image_does_not_publish_new_env(self):
+        result = self.deploy('running-image', docker_mode='sudo')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('Running image mismatch', result.stderr)
+        self.assertEqual((self.target / '.env').read_text(), self.old_env)
+        self.assertEqual((self.target / 'compose.cloudflare.yaml').read_text(), 'old-compose\n')
+
+    def test_new_app_is_forced_to_recreate_without_pulling_and_verified(self):
+        result = self.deploy(docker_mode='sudo')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        up = next(entry for entry in self.calls() if 'up' in entry and 'app' in entry)
+        self.assertIn('--force-recreate', up)
+        self.assertIn('--pull', up)
+        self.assertIn('never', up)
+        self.assertIn('Verified app: oms:new', result.stdout)
 
     def test_sudo_authentication_preserves_piped_input_and_backups(self):
         result = self.deploy(docker_mode='sudo')
